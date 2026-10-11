@@ -86,5 +86,6 @@ pub(super) fn test_terminal_session(
             .map(|(session_seq, events_rx)| test_terminal_instance(session_seq, events_rx, cx))
             .collect(),
         active_index,
+        panel_hidden: false,
     }
 }

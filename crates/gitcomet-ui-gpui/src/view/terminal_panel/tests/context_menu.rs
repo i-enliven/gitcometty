@@ -56,6 +56,7 @@ fn fixture(cx: &mut gpui::TestAppContext) -> (TerminalMenuFixture, &mut gpui::Vi
                     repo_name: "terminal-menu-test".to_string(),
                     instances: vec![instance],
                     active_index: 0,
+                    panel_hidden: false,
                 },
             );
             root.focus_terminal_view(repo_id, window, cx);
@@ -621,6 +622,7 @@ fn terminal_menu_keeps_its_origin_when_the_active_session_changes(cx: &mut gpui:
                                 repo_name: "other".into(),
                                 instances: vec![instance],
                                 active_index: 0,
+                                panel_hidden: false,
                             },
                         );
                     } else {
@@ -688,6 +690,7 @@ fn terminal_session_disappearance_dismisses_menu_and_rejects_late_actions(
                             repo_name: "replacement".into(),
                             instances: vec![replacement],
                             active_index: 0,
+                            panel_hidden: false,
                         },
                     );
                 } else {

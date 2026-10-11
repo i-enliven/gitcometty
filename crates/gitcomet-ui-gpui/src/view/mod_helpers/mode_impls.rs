@@ -1065,6 +1065,9 @@ pub(crate) struct RepoTerminalSession {
     pub(crate) repo_name: String,
     pub(crate) instances: Vec<TerminalInstance>,
     pub(crate) active_index: usize,
+    /// True when the bottom panel is closed for this repo while the session
+    /// keeps running. Lives on the session so it cannot outlive it.
+    pub(crate) panel_hidden: bool,
 }
 
 impl RepoTerminalSession {

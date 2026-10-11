@@ -228,13 +228,17 @@ impl GitCometView {
         let workdir = repo.spec.workdir.clone();
         let repo_name = terminal_repo_name(&repo.spec.workdir);
 
-        if self.terminal_sessions.contains_key(&repo_id) {
-            if !self.request_close_terminal_for_repo(repo_id, cx) {
-                self.close_terminal_for_repo(repo_id, cx);
-            }
-            return;
+        // Three-way: no session spawns, a hidden session comes back, a visible
+        // one is stowed. Neither the hide nor the show branch touches the PTY.
+        let stowed = self
+            .terminal_sessions
+            .get(&repo_id)
+            .map(|session| session.panel_hidden);
+        match stowed {
+            Some(true) => self.show_terminal_panel_for_repo(repo_id, window, cx),
+            Some(false) => self.hide_terminal_panel_for_repo(repo_id, cx),
+            None => self.open_terminal_for_repo(repo_id, workdir, repo_name, window, cx),
         }
-        self.open_terminal_for_repo(repo_id, workdir, repo_name, window, cx);
     }
 
     pub(in crate::view) fn activate_terminal_button_for_active_repo(
@@ -355,6 +359,7 @@ impl GitCometView {
                 repo_name,
                 instances: vec![instance],
                 active_index: 0,
+                panel_hidden: false,
             },
         );
 
@@ -591,6 +596,41 @@ impl GitCometView {
             self.deactivate_terminal_cursor_blink();
         }
         self.sync_terminal_indicator_views(cx);
+        cx.notify();
+    }
+
+    /// Stow the panel without touching the session: no PTY shutdown, no removal,
+    /// no cursor-blink teardown. The flag lives on the session, so closing the
+    /// repo, the window or the app still takes the whole session with it.
+    pub(in crate::view) fn hide_terminal_panel_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if let Some(session) = self.terminal_sessions.get_mut(&repo_id) {
+            session.panel_hidden = true;
+        }
+        self.sync_terminal_indicator_views(cx);
+        cx.notify();
+    }
+
+    /// Bring a stowed panel back: the same session, the same PTY, the same
+    /// viewport entity.
+    pub(in crate::view) fn show_terminal_panel_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(session) = self.terminal_sessions.get_mut(&repo_id) else {
+            return;
+        };
+        session.panel_hidden = false;
+        self.active_bottom_panel
+            .insert(repo_id, BottomPanelTab::Terminal);
+        self.reset_terminal_cursor_blink(cx);
+        self.sync_terminal_indicator_views(cx);
+        self.focus_terminal_view(repo_id, window, cx);
         cx.notify();
     }
 
@@ -1052,6 +1092,9 @@ impl GitCometView {
 
         let (viewport_entity, session_seq, tabs, active_index) = {
             let session = self.terminal_sessions.get(&active_repo)?;
+            if session.panel_hidden {
+                return None;
+            }
             let active = session.active_instance()?;
             let tabs: Vec<SharedString> = session
                 .instances

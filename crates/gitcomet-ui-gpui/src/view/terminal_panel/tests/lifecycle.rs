@@ -1,5 +1,6 @@
 use super::super::*;
 use super::support::*;
+use crate::test_support::refresh_and_draw;
 
 #[gpui::test]
 fn terminal_toolbar_fill_tracks_panel_lifetime_and_target(cx: &mut gpui::TestAppContext) {
@@ -364,4 +365,205 @@ fn comfortable_bottom_panel_tabs_grow_with_the_density(cx: &mut gpui::TestAppCon
             );
         }
     }
+}
+
+#[gpui::test]
+fn closing_the_terminal_panel_hides_it_and_keeps_the_session_alive(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            let (events_tx, events_rx) = smol::channel::unbounded();
+            this.terminal_sessions.insert(
+                repo_id,
+                test_terminal_session(vec![(50, Some(events_rx))], 0, cx),
+            );
+            this.hide_terminal_panel_for_repo(repo_id, cx);
+
+            let theme = this.theme;
+            assert!(this.render_terminal_panel(theme, window, cx).is_none());
+            let session = this
+                .terminal_sessions
+                .get(&repo_id)
+                .expect("hidden session survives panel close");
+            assert!(session.panel_hidden);
+            assert!(session.instance_by_seq(50).is_some());
+            drop(events_tx);
+        })
+    });
+}
+
+#[gpui::test]
+fn showing_a_hidden_terminal_panel_restores_the_same_session(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            let (events_tx, events_rx) = smol::channel::unbounded();
+            this.terminal_sessions.insert(
+                repo_id,
+                test_terminal_session(vec![(51, Some(events_rx))], 0, cx),
+            );
+            this.hide_terminal_panel_for_repo(repo_id, cx);
+            this.show_terminal_panel_for_repo(repo_id, window, cx);
+
+            let session = this
+                .terminal_sessions
+                .get(&repo_id)
+                .expect("shown session is the one that was hidden");
+            assert!(!session.panel_hidden);
+            assert!(session.instance_by_seq(51).is_some());
+            assert_eq!(
+                this.active_bottom_panel.get(&repo_id),
+                Some(&BottomPanelTab::Terminal)
+            );
+            drop(events_tx);
+        })
+    });
+
+    // The panel renders again. Asserted through a real draw rather than by
+    // calling `render_terminal_panel` directly: building that element tree
+    // outside a frame leaks the viewport handle, which gpui's leak detector
+    // reports as a leaked `TerminalViewportView`. `terminal_context_surface`
+    // is the panel's own debug selector, so drawn bounds are the same claim.
+    refresh_and_draw(cx);
+    assert!(cx.debug_bounds("terminal_context_surface").is_some());
+    assert!(cx.debug_bounds("terminal_tab-0").is_some());
+}
+
+#[gpui::test]
+fn the_terminal_toggle_hides_a_visible_panel_and_reshows_a_hidden_one(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    let before = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let (events_tx, events_rx) = smol::channel::unbounded();
+            this.terminal_sessions.insert(
+                repo_id,
+                test_terminal_session(vec![(57, Some(events_rx))], 0, cx),
+            );
+            drop(events_tx);
+            this.terminal_sessions[&repo_id]
+                .instances
+                .iter()
+                .map(|instance| instance.session_seq)
+                .collect::<Vec<_>>()
+        })
+    });
+    assert_eq!(before, vec![57]);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.toggle_terminal_for_active_repo(window, cx);
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| {
+            assert!(
+                this.terminal_sessions.contains_key(&repo_id),
+                "hiding must not drop the session"
+            );
+            assert!(this.terminal_sessions[&repo_id].panel_hidden);
+        });
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.toggle_terminal_for_active_repo(window, cx);
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| {
+            let session = &this.terminal_sessions[&repo_id];
+            assert!(!session.panel_hidden);
+            assert_eq!(
+                session
+                    .instances
+                    .iter()
+                    .map(|instance| instance.session_seq)
+                    .collect::<Vec<_>>(),
+                before,
+                "the toggle must not respawn a shell"
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn closing_the_repo_still_kills_a_hidden_terminal_session(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let (events_tx, events_rx) = smol::channel::unbounded();
+            this.terminal_sessions.insert(
+                repo_id,
+                test_terminal_session(vec![(55, Some(events_rx))], 0, cx),
+            );
+            this.hide_terminal_panel_for_repo(repo_id, cx);
+            this.close_terminal_for_repo(repo_id, cx);
+
+            assert!(!this.terminal_sessions.contains_key(&repo_id));
+            drop(events_tx);
+        })
+    });
+}
+
+#[gpui::test]
+fn hiding_the_terminal_panel_asks_no_terminate_confirmation(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            let (events_tx, events_rx) = smol::channel::unbounded();
+            this.terminal_sessions.insert(
+                repo_id,
+                test_terminal_session(vec![(56, Some(events_rx))], 0, cx),
+            );
+            this.hide_terminal_panel_for_repo(repo_id, cx);
+
+            assert!(this.pending_terminal_shutdown_prompt.is_none());
+            let theme = this.theme;
+            assert!(this.render_bottom_panel(theme, window, cx).is_none());
+            drop(events_tx);
+        })
+    });
+}
+
+#[gpui::test]
+fn closing_a_tab_still_kills_that_tab_and_leaves_the_panel_visible(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.terminal_sessions.insert(
+                repo_id,
+                test_terminal_session(vec![(52, None), (53, None)], 1, cx),
+            );
+            this.close_terminal_tab(repo_id, 1, window, cx);
+
+            let session = this
+                .terminal_sessions
+                .get(&repo_id)
+                .expect("closing one tab keeps the session");
+            assert!(session.instance_by_seq(53).is_none());
+            assert!(session.instance_by_seq(52).is_some());
+            assert!(!session.panel_hidden);
+        })
+    });
+
+    // The surviving tab still renders, through a draw rather than a direct
+    // `render_terminal_panel` call; see
+    // `showing_a_hidden_terminal_panel_restores_the_same_session`.
+    refresh_and_draw(cx);
+    assert!(cx.debug_bounds("terminal_context_surface").is_some());
+    assert!(cx.debug_bounds("terminal_tab-0").is_some());
 }
