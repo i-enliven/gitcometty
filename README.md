@@ -1,302 +1,204 @@
+## <img alt="GitComet logo" src="assets/gitcomet_logo.svg" width="26" /> GitCometty
 
-## <img alt="GitComet logo" src="assets/gitcomet_logo.svg" width="26" /> GitComet
+A local fork of [GitComet](https://github.com/Auto-Explore/GitComet), a fast
+open-source Git GUI built on Zed's [GPUI](https://github.com/zed-industries/zed).
+This README covers **building and running it from source**. For upstream
+distribution channels, packaging and product pages, go to the upstream repo.
 
-[![Build Status](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml/badge.svg?branch=main)](https://github.com/Auto-Explore/GitComet/actions/workflows/rust.yml)
-[![Discord](https://img.shields.io/badge/Discord-Join%20chat-5865F2?logo=discord&logoColor=white)](https://discord.gg/2ufDGP8RnA)
-[![Website](https://img.shields.io/badge/Website-gitcomet.dev-0A66C2?logo=googlechrome&logoColor=white)](https://gitcomet.dev)
-[![AutoExplore](https://img.shields.io/badge/AutoExplore-autoexplore.ai-0B7A75?logo=safari&logoColor=white)](https://autoexplore.ai)
-[![license](https://img.shields.io/github/license/Auto-Explore/gitcomet.svg)](LICENSE)
-[![latest](https://img.shields.io/github/v/release/Auto-Explore/gitcomet.svg)](https://github.com/Auto-Explore/gitcomet/releases/latest)
-[![downloads](https://img.shields.io/github/downloads/Auto-Explore/gitcomet/total)](https://github.com/Auto-Explore/gitcomet/releases)
-
-**Fastest Open Source Git GUI**
-
-GitComet is built for teams that want fast Git operations with local-first privacy, familiar workflows, and open source freedom.
-
-Available for Linux, Windows, and macOS.
-
-
-
-https://github.com/user-attachments/assets/acc45615-7e13-4952-aebe-36f600cc4f24
-
-
-
-### Download
-
-Download the latest prebuilt binaries/installers from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
-
-<details>
-<summary>Windows</summary>
-
-Download the latest Windows installer or portable binary from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases).
-
-Install from the Microsoft Store:
-
-<a href="https://apps.microsoft.com/detail/XPFD182V1H793R?referrer=appbadge&mode=full" target="_blank"  rel="noopener noreferrer">
-  <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200"/>
-</a>
-
-</details>
-
-<details>
-<summary>Homebrew (macOS / Linux)</summary>
-
-App and `gitcomet` command from tap:
-
-```bash
-brew install --cask gitcomet
-```
-
-On Linux, the cask installs the AppImage build. If your system cannot launch AppImages, use the APT repo, the RPM, the release tarball, or the `.deb` instead.
-
-</details>
-
-<details>
-<summary>AUR (Arch Linux)</summary>
-
-The [`gitcomet-bin`](https://aur.archlinux.org/packages/gitcomet-bin) package repackages the release tarballs for x86_64 and aarch64 and is updated by the release workflow:
-
-```bash
-git clone https://aur.archlinux.org/gitcomet-bin.git
-cd gitcomet-bin && makepkg -si
-```
-
-</details>
-
-<details>
-<summary>GURU (Gentoo Linux)</summary>
-
-```bash
-emerge --ask dev-vcs/gitcomet
-```
-
-</details>
-
-<details>
-<summary>apt (Debian/Ubuntu)</summary>
-
-```bash
-curl -fsSL https://apt.gitcomet.dev/gitcomet-archive-keyring.gpg | sudo tee /usr/share/keyrings/gitcomet-archive-keyring.gpg >/dev/null
-curl -fsSL https://apt.gitcomet.dev/gitcomet.sources | sudo tee /etc/apt/sources.list.d/gitcomet.sources >/dev/null
-sudo apt update
-sudo apt install gitcomet
-```
-
-If you install a Linux tarball or Homebrew binary on Debian, Ubuntu, or WSLg instead of the official `apt` package, install the GUI runtime libraries separately. GitComet uses Fontconfig to discover fonts, draws with Vulkan, or EGL when Vulkan is unavailable, and uses the Wayland libraries in Wayland sessions:
-
-```bash
-sudo apt install libfontconfig1 libxcb1 libxkbcommon0 libxkbcommon-x11-0 libvulkan1 libegl1 libwayland-client0 libwayland-egl1
-```
-
-</details>
-
-<details>
-<summary>RPM (Fedora)</summary>
-
-Download the `.rpm` for your architecture from [GitHub Releases](https://github.com/Auto-Explore/GitComet/releases) and install it:
-
-```bash
-sudo dnf install ./gitcomet-<version>-1.x86_64.rpm
-```
-
-The RPM supports Fedora 42 and newer. It needs glibc 2.35 or newer, so RHEL 9 and its rebuilds (glibc 2.34) cannot install it.
-
-</details>
+Everything below is verified against this checkout. `CONTRIBUTING.md` has the
+full CI and workspace layout; `.github/workflows/` is the ground truth for what
+CI actually runs.
 
 ### Requirements
 
-GitComet requires a local Git installation of `2.53` or newer. With an older Git, GitComet shows a notice asking you to update, and features that need newer Git (such as repository maintenance) are turned off.
+- **Git 2.53 or newer** on `PATH`. With an older Git the app shows a notice and
+  turns off features that need newer Git (repository maintenance, and so on).
+- **Rust 1.99**, pinned by `rust-toolchain.toml` (`channel = "1.99"`, with
+  `rustfmt` and `clippy` components). A plain `rustup` install picks it up
+  automatically — check with `rustup show active-toolchain`.
+- **Python 3** — used by the CI runner and by `scripts/install-mold.py`.
+- Network access on a clean checkout: `vendor/` holds only `path =` dependencies
+  (the mermaid renderer and the tree-sitter grammars). `gpui-ce` and everything
+  else still comes from crates.io and git.
 
-### GitComet User Survey
+### Prerequisites
 
-We’re running this short survey to better understand how people use our Git GUI client in their daily work. Your feedback will help us improve the product and prioritize the features that matter most.
+**Linux.** The build is *linker-bound*: `.cargo/config.toml` pins the Linux
+linker to `scripts/linux/mold-linker.sh`, which runs
+`exec clang "$@" -fuse-ld=mold`. Without **both** clang and mold on `PATH` the
+build fails at link time.
 
-https://docs.google.com/forms/d/e/1FAIpQLSd8DKIl222UomSXrpv1q9rWodRlBSQo9pJDD62GbZEANTgD1A/viewform?usp=dialog
+```bash
+# Debian/Ubuntu
+sudo apt-get install -y clang pkg-config libxcb1-dev libxkbcommon-dev libxkbcommon-x11-dev
+# Fedora
+sudo dnf install -y clang pkg-config libxcb-devel libxkbcommon-devel libxkbcommon-x11-devel
+# Arch
+sudo pacman -S clang pkgconf libxcb libxkbcommon libxkbcommon-x11
 
-### Why GitComet
+python3 scripts/install-mold.py --bin-dir "$HOME/.local/bin"
+export PATH="$HOME/.local/bin:$PATH"
+mold --version    # must report mold 3.0.0
+```
 
-GitComet started from frustration with existing tools on huge codebases like Chromium. We could not find a product that stays responsive and functional when browsing large repositories and file diffs.
+To build without mold (slower links, no code change needed):
 
-### Editions (planned)
+```bash
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=cc cargo build -p gitcomet --features ui-gpui,gix
+```
 
-#### Open Source
+Verify the mold linker really was used:
+`readelf -p .comment target/debug/gitcomet` should show `mold 3.0.0`.
 
-- **Price**: €0 forever
-- **Usage**: Free for personal and commercial use
-- **Includes**:
-  - Full local-first desktop workflow
-  - Git remotes, pull/push, staging, commits
-  - Worktrees, branching, and full history
-  - Multi-repository browsing
-  - Inline and side-by-side diffs
-  - 2-way and 3-way merge tools
-  - Git LFS: file status, content downloads, locks and tracking ([docs](docs/git-lfs.md))
-  - git-annex: content get/drop/copy/move, special remotes, adjusted branches ([docs](docs/git-annex.md))
+**macOS.** The system toolchain is enough. Install `git-lfs` if you want the
+fixture-backed tests to run rather than skip.
 
-#### Professional
+**Windows.** Visual Studio 2022 (Community or Build Tools) with the
+**Desktop development with C++** workload — MSVC tools plus a Windows 10/11 SDK.
+No separate LLVM: `.cargo/config.toml` routes linking through
+`scripts/windows/windows-lld-linker.cmd`, which uses the bundled `rust-lld`.
 
-- **Price**: €20 lifetime access (limited-time early adopter offer)
-- **Includes everything in Open Source, plus**:
-  - Claude Code, Codex, and GitHub CLI integrations
-  - Code test coverage workflows
-  - GitHub and Azure DevOps integrations
-  - Priority improvements during early access
-- Join waitlist: [gitcomet.dev/#editions](https://gitcomet.dev/#editions)
+### Get the checkout complete
 
-### Build from source
+Two things are missing from a plain `git clone` and both silently downgrade the
+test suite instead of failing:
 
-On Linux, install Clang and mold first; see [developer setup](CONTRIBUTING.md#getting-started).
+```bash
+git submodule update --init fixtures/syntax_test   # syntax-highlighting corpus
+git lfs install                                    # binary test fixtures
+```
+
+### Build
 
 ```bash
 cargo build -p gitcomet --features ui-gpui,gix
-cargo run -p gitcomet --features ui-gpui,gix -- /path/to/repo
 ```
 
-### Contributing
-
-Developer setup, workspace layout, testing, and coverage docs live in `CONTRIBUTING.md`.
-
-### Using as a Git difftool / mergetool
-
-GitComet can be used as a standalone diff and merge tool invoked by `git difftool` and `git mergetool`. It supports both headless (algorithm-only) and GUI (interactive GPUI window) modes.
-
-#### Setup / uninstall (recommended)
+Produces `target/debug/gitcomet`. `ui-gpui` and `gix` are already the package
+defaults (`crates/gitcomet/Cargo.toml`), so the flags are explicit rather than
+necessary — drop `ui-gpui` for a headless build with no GUI, which is what CI's
+headless lane does:
 
 ```bash
-# Configure Git globally to use GitComet for both difftool + mergetool
-gitcomet setup
-
-# Remove GitComet integration safely
-gitcomet uninstall
+cargo build --locked -p gitcomet --no-default-features --features gix
 ```
 
-- Use `--local` to target only the current repository instead of global config.
-- Use `--dry-run` to print the commands before applying changes.
-
-This setup registers both headless and GUI variants with `guiDefault=auto`, so Git chooses GUI when display is available and falls back to headless otherwise.
-`setup`/`uninstall` are designed to be idempotent.
-
-<details>
-<summary>Show detailed setup/uninstall behavior and manual commands</summary>
-
-Built-in `setup` writes these Git config entries:
+Release build, matching the release workflow:
 
 ```bash
-GITCOMET_BIN="/absolute/path/to/gitcomet"
-
-# Headless tool: algorithm-only merge/diff for CI, scripts, and no-display environments
-git config --global merge.tool gitcomet
-git config --global mergetool.gitcomet.cmd \
-  "'$GITCOMET_BIN' mergetool --base \"\$BASE\" --local \"\$LOCAL\" --remote \"\$REMOTE\" --merged \"\$MERGED\""
-git config --global mergetool.trustExitCode true
-git config --global mergetool.gitcomet.trustExitCode true
-git config --global mergetool.prompt false
-
-git config --global diff.tool gitcomet
-git config --global difftool.gitcomet.cmd \
-  "'$GITCOMET_BIN' difftool --local \"\$LOCAL\" --remote \"\$REMOTE\" --path \"\$MERGED\""
-git config --global difftool.trustExitCode true
-git config --global difftool.gitcomet.trustExitCode true
-git config --global difftool.prompt false
-
-# GUI tool: opens focused GPUI windows for interactive diff/merge
-git config --global merge.guitool gitcomet-gui
-git config --global mergetool.gitcomet-gui.cmd \
-  "'$GITCOMET_BIN' mergetool --gui --base \"\$BASE\" --local \"\$LOCAL\" --remote \"\$REMOTE\" --merged \"\$MERGED\""
-git config --global mergetool.gitcomet-gui.trustExitCode true
-
-git config --global diff.guitool gitcomet-gui
-git config --global difftool.gitcomet-gui.cmd \
-  "'$GITCOMET_BIN' difftool --gui --local \"\$LOCAL\" --remote \"\$REMOTE\" --path \"\$MERGED\""
-git config --global difftool.gitcomet-gui.trustExitCode true
-
-# Auto-select GUI tool when DISPLAY is available, headless otherwise
-git config --global mergetool.guiDefault auto
-git config --global difftool.guiDefault auto
+cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
 ```
 
-Built-in `setup` stores previous user values for shared generic keys under `gitcomet.backup.*` (when needed).  
-Built-in `uninstall` restores those backups only when the key still has the setup-managed value. If the user changed a setting after setup, uninstall preserves that user-edited value and then removes GitComet-specific keys.
+No pre-build codegen step is needed. Build scripts generate the theme registry,
+the icon asset table and the splash backdrop PNGs automatically, and the bundled
+fonts are committed.
 
-</details>
-
-#### CLI modes
-
-**Difftool:**
+### Run
 
 ```bash
-gitcomet difftool --local <path> --remote <path> [--path <display_name>] [--label-left <label>] [--label-right <label>]
+cargo run -p gitcomet --bin gitcomet --features ui-gpui,gix -- /path/to/repo
 ```
 
-Also reads `LOCAL`/`REMOTE` from environment as a fallback when invoked by Git.
+or `./target/debug/gitcomet /path/to/repo`. The first argument is the repository
+to open; with no argument it falls back to the current directory.
 
-**Mergetool:**
+On Linux you need a Wayland or X11 session. Wayland is preferred and the app
+falls back to X11; to force X11, unset `WAYLAND_DISPLAY`/`WAYLAND_SOCKET` and
+`export XDG_SESSION_TYPE=x11`.
+
+Two runtime notes:
+
+- x86-64 builds pass `-Ctarget-cpu=x86-64-v3` (`.cargo/config.toml`), so the
+  binary will not run on older x86-64 CPUs.
+- On Windows the renderer defaults to *Automatic*: it probes DX12 and falls back
+  to DirectX 11 compatibility, persisting the result. Override with
+  `GPUI_WINDOWS_RENDERER=dx11` or `wgpu-dx12` — see `docs/windows-renderer.md`.
+
+### Test
 
 ```bash
-gitcomet mergetool --local <path> --remote <path> --merged <path> [--base <path>] [--label-local <label>] [--label-remote <label>] [--label-base <label>]
+# Full suite, headless CI mode
+cargo test --workspace --no-default-features --features gix
+
+# One crate
+cargo test -p gitcomet-ui-gpui --lib
+
+# One test
+cargo test -p gitcomet-ui-gpui --lib terminal
 ```
 
-Also reads `LOCAL`/`REMOTE`/`MERGED`/`BASE` from environment. Base is optional for add/add conflicts.
+The GPUI harnesses (`gitcomet-ui-gpui`, `gitcomet-ui-kit`,
+`gitcomet-extension-example`) must run under **libtest, one process per crate** —
+their test contexts share process-global platform state, so they do not work
+under nextest's process-per-test model. Everything else runs under nextest.
 
-#### Compatibility
+The canonical wrapper CI uses handles that split for you, but needs
+`cargo-nextest` 0.9.145 (`python3 scripts/ci/install-nextest.py`):
 
-KDiff3 and Meld invocation forms are supported (`--L1/--L2/--L3`, `-o/--output/--out`, `--base`, positional arguments), so GitComet can be a drop-in replacement.
+```bash
+python3 scripts/ci/run.py compile --context workspace
+python3 scripts/ci/run.py test --context workspace
+```
 
-### Commit signature verification
+### Lint and format
 
-GitComet shows verification badges on signed commits. Git performs the check, using `gpg` for GPG and X.509 signatures and `ssh-keygen` for SSH signatures, so badges need those programs and the signers' public keys. **Settings → Executables** shows which programs GitComet found.
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --no-default-features --features gix -- -D warnings
+```
 
-To install GnuPG, trust GitHub's signing key, and configure SSH allowed signers, see the [commit signature guide](docs/commit-signatures.md).
+Both are enforced in CI. `unsafe_code = "forbid"` is a workspace lint.
+
+### Using it as a difftool / mergetool
+
+The built binary can be registered with Git for `git difftool` and
+`git mergetool`, in both headless (algorithm-only) and GUI modes:
+
+```bash
+./target/debug/gitcomet setup      # add --local for this repo only, --dry-run to preview
+./target/debug/gitcomet uninstall  # idempotent; restores values it backed up
+```
+
+This registers headless and GUI variants with `guiDefault=auto`, so Git opens a
+GUI window when a display is available and falls back to headless otherwise.
+
+Manual invocation:
+
+```bash
+gitcomet difftool  --local <path> --remote <path> [--path <display_name>]
+gitcomet mergetool --local <path> --remote <path> --merged <path> [--base <path>]
+```
+
+KDiff3 and Meld invocation forms (`--L1/--L2/--L3`, `-o/--output`, `--base`,
+positional arguments) are also accepted, so it can replace either as a
+drop-in.
 
 ### Themes
 
-GitComet supports built-in themes and user-provided custom themes.
-
-Built-in themes are embedded in the GitComet binary. Custom themes are loaded from JSON bundle files in your per-user themes directory, which GitComet creates on startup.
-
-The full theme guide, including file locations, schema details, example bundles, and override behavior, now lives in [THEMES.md](docs/themes.md).
+Built-in themes are embedded in the binary. Custom themes are JSON bundles in
+your per-user themes directory, which the app creates on startup. Schema, file
+locations and override behaviour: [`docs/themes.md`](docs/themes.md).
 
 ### Crash logs
 
-GitComet writes panic logs and abnormal-exit recovery state to:
+Panic logs and abnormal-exit recovery state are written to:
 
-- Linux: `$XDG_STATE_HOME/gitcomet/crashes/` (fallback: `~/.local/state/gitcomet/crashes/`)
+- Linux: `~/.local/state/gitcomet/crashes/` (honouring `$XDG_STATE_HOME`)
 - macOS: `~/Library/Logs/gitcomet/crashes/`
-- Windows: `%LOCALAPPDATA%\gitcomet\crashes\` (fallback: `%APPDATA%\gitcomet\crashes\`)
+- Windows: `%LOCALAPPDATA%\gitcomet\crashes\`
 
-On Linux, the directory normally is `~/.local/state/gitcomet/crashes/`.
-GitComet creates a process-specific `session-in-progress-<pid>.log` before it
-starts the GPUI runtime. A native abort, terminated UI, or GPUI event loop exit
-without an explicitly requested user shutdown leaves that marker behind; Rust
-panics also write `panic-*.log`. Error-level runtime diagnostics are mirrored to
-`last-runtime-error-<pid>.log`, including their source location and a backtrace,
-so fatal errors logged and consumed by the UI runtime remain reportable.
-Recovery ignores markers owned by still-running GitComet processes, so one open
-instance cannot consume another's crash state.
-On the next launch, GitComet snapshots recovered data as
-`pending-startup-report.log` and retains it until the user reports or dismisses
-the notification, so a failed subsequent launch cannot discard the report before
-its notification is visible.
+See [`docs/crash-symbolication.md`](docs/crash-symbolication.md) for turning a
+captured backtrace into something readable.
 
-GitComet presents the report in the next UI launch and also prints its
-prefilled GitHub issue URL and log path to the launching terminal. The report
-includes app version, platform, structured failure details, and a trimmed
-backtrace.
+### Prior work and ideas inspired by
 
-### Prior work and ideas inspired by:
-
-SourceTree, GitKraken, Zed, GPUI, KDiff3, Meld, Github Desktop, Git, Gix, Rust, Smol, and many more.
-
-This project has been created with the help of AI tools, including OpenAI Codex and Claude Code.
-
-### Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=Auto-Explore/gitcomet&type=Date)](https://star-history.com/#Auto-Explore/gitcomet&Date)
+SourceTree, GitKraken, Zed, GPUI, KDiff3, Meld, GitHub Desktop, Git, Gix, Rust,
+Smol, and many more.
 
 ### License
 
 GitComet is licensed under the GNU Affero General Public License Version 3
 (AGPL-3.0-only). See `LICENSE-AGPL-3.0`.
 
-Copyright (C) 2026 AutoExplore Oy  
-Contact: info@autoexplore.ai
+Copyright (C) 2026 AutoExplore Oy — upstream:
+[Auto-Explore/GitComet](https://github.com/Auto-Explore/GitComet).
