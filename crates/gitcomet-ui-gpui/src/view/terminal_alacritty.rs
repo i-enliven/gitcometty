@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 const TERMINAL_INITIAL_ROWS: u16 = 24;
 const TERMINAL_INITIAL_COLS: u16 = 80;
-pub(super) const TERMINAL_SCROLLBACK_ROWS: usize = 10_000;
+pub(super) const TERMINAL_SCROLLBACK_ROWS: usize = 5_000;
 const TERMINAL_ALT_SCREEN_WHEEL_MAX_KEY_REPEATS: usize = 24;
 
 #[derive(Clone, Copy, Debug)]
@@ -1742,6 +1742,13 @@ mod tests {
     fn terminal_config_disables_osc52() {
         let config = terminal_config(TERMINAL_SCROLLBACK_ROWS);
         assert!(matches!(config.osc52, Osc52::Disabled));
+    }
+
+    /// Deliberately a value-pinning test: the constant has no behavioural test
+    /// surface, and the requester specified the number.
+    #[test]
+    fn terminal_scrollback_keeps_five_thousand_rows() {
+        assert_eq!(TERMINAL_SCROLLBACK_ROWS, 5_000);
     }
 
     #[test]
