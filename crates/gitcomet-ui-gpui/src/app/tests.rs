@@ -1938,6 +1938,7 @@ impl Render for KeyBindingProbe {
             .on_action(record_action_listener!(crate::view::HistoryFindPrevious))
             .on_action(record_action_listener!(crate::view::ToggleCommandPalette))
             .on_action(record_action_listener!(crate::view::ToggleRevealCommit))
+            .on_action(record_action_listener!(crate::view::ToggleTerminal))
             .on_action(record_action_listener!(crate::view::LocateFileInExplorer))
             .on_action(record_action_listener!(crate::view::OpenRemoteInBrowser))
             .on_action(record_action_listener!(NewWindow))
@@ -2477,6 +2478,9 @@ fn app_keybindings_resolve_expected_actions(cx: &mut gpui::TestAppContext) {
         ("secondary-f", crate::view::OpenActiveViewSearch.name()),
         ("secondary-p", crate::view::ToggleCommandPalette.name()),
         ("secondary-g", crate::view::ToggleRevealCommit.name()),
+        // Ctrl+` toggles the embedded terminal of the active repository, from
+        // anywhere in the window (the binding carries no context).
+        ("ctrl-`", crate::view::ToggleTerminal.name()),
         (
             "secondary-shift-l",
             crate::view::LocateFileInExplorer.name(),

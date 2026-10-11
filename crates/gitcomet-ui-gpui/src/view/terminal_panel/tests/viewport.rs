@@ -851,3 +851,23 @@ fn a_busy_parser_does_not_block_paint_or_scrollbar_reads(cx: &mut gpui::TestAppC
         );
     });
 }
+
+#[gpui::test]
+fn the_terminal_viewport_takes_gpui_focus_through_its_entity(cx: &mut gpui::TestAppContext) {
+    use gpui::Focusable;
+
+    let term_lock = test_term_with_lines(4);
+    let (view, cx) = test_viewport(term_lock, cx);
+
+    cx.update(|window, app| {
+        // `impl Focusable for TerminalViewportView` is what hands the handle to
+        // the entity: the terminal is a focusable view in GPUI's focus
+        // semantics, not only a div with `track_focus` on it.
+        let focus = view.focus_handle(app);
+        window.focus(&focus, app);
+        assert!(
+            view.read(app).focus_handle.is_focused(window),
+            "focusing the entity must focus the viewport's own handle"
+        );
+    });
+}

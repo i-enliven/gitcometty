@@ -131,6 +131,7 @@ actions!(
         ToggleCommandPalette,
         CommandPaletteDismiss,
         ToggleRevealCommit,
+        ToggleTerminal,
         LocateFileInExplorer,
         OpenRemoteInBrowser,
     ]

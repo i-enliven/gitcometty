@@ -1649,6 +1649,19 @@ impl TerminalViewportView {
     }
 }
 
+/// The viewport owns its own focus: `track_focus` in `Render::render` installs
+/// the handle in the element tree, and this exposes that handle on the entity,
+/// so GPUI's focus semantics (`Entity::focus_handle`, `window.focus`) reach the
+/// terminal the same way they reach every other view. gpui-ce has no
+/// `FocusableView`; `Focusable` is this fork's trait for the same job.
+/// The keystroke interceptor stays: it covers keys the app's own bindings would
+/// claim before they ever arrive here.
+impl gpui::Focusable for TerminalViewportView {
+    fn focus_handle(&self, _cx: &gpui::App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 impl Render for TerminalViewportView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         if self.focus_subscriptions.is_none() {

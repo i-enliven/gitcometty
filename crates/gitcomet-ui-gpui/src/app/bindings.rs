@@ -80,6 +80,11 @@ pub(super) fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
             });
         });
     });
+    // The terminal panel is sized against its window, so this action needs the
+    // window handle as well as the view; the view-only helper cannot supply it.
+    cx.on_action(|_: &crate::view::ToggleTerminal, cx| {
+        cx.defer(toggle_terminal_in_active_or_existing_normal_window);
+    });
 
     cx.on_action(|_: &Close, cx| {
         cx.defer(|cx| {
@@ -157,6 +162,24 @@ fn step_window_ui_scale(cx: &mut App, step: fn(u32) -> u32) {
     cx.defer(move |cx| {
         let next = step(ui_scale::percent_for_window(cx, window_id));
         set_window_ui_scale_percent(cx, window_id, Some(next));
+    });
+}
+
+/// Opens or closes the embedded terminal of the active repository in the active
+/// (or, failing that, most recently focused) normal window. The availability
+/// gate is the one `toggle_terminal_for_active_repo` applies: no open
+/// repository, no terminal.
+fn toggle_terminal_in_active_or_existing_normal_window(cx: &mut App) {
+    let Some(entry) = find_normal_gitcomet_window(cx) else {
+        return;
+    };
+    let _ = entry.handle.update(cx, |root_view, window, cx| {
+        let Ok(view) = root_view.downcast::<GitCometView>() else {
+            return;
+        };
+        view.update(cx, |view, cx| {
+            view.toggle_terminal_for_active_repo(window, cx);
+        });
     });
 }
 
@@ -266,6 +289,9 @@ pub(super) fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
         KeyBinding::new("secondary-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-g", crate::view::ToggleRevealCommit, None),
+        // The conventional terminal hotkey. Backquote is reported as a literal
+        // `` ` `` on every platform, so no per-OS variant is needed.
+        KeyBinding::new("ctrl-`", crate::view::ToggleTerminal, None),
         KeyBinding::new("secondary-shift-l", LocateFileInExplorer, None),
         KeyBinding::new("secondary-k", OpenRemoteInBrowser, None),
         KeyBinding::new("secondary-w", Close, None),

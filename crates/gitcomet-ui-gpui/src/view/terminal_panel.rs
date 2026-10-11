@@ -6,6 +6,7 @@ use crate::view::components::{ControlInteractionExt, InteractionState, Interacti
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process_group};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 mod painting;
 mod viewport;
@@ -30,8 +31,39 @@ const TERMINAL_CARET_RESUME_DELAY_MS: u64 = 700;
 /// text inputs do: every blink redraws the whole window.
 const TERMINAL_CARET_BLINK_TIMEOUT_MS: u64 = 10_000;
 const TERMINAL_SELECTION_ALPHA: f32 = 0.32;
+/// Grid-content repaints are coalesced into one notification per window of
+/// this length. alacritty emits a `Wakeup` per PTY read batch, so `find / -type
+/// f` or a 50MB log dump would otherwise queue one `cx.notify()` per batch and
+/// starve the GPUI frame loop. 16ms is one frame at 60fps.
+const TERMINAL_RENDER_COALESCE_INTERVAL: Duration = Duration::from_millis(16);
 const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
 const BRACKETED_PASTE_END: &[u8] = b"\x1b[201~";
+
+/// Coalesces the grid-content repaint requests of one terminal instance into at
+/// most one `cx.notify()` per [`TERMINAL_RENDER_COALESCE_INTERVAL`] window. The
+/// event task owns one and clones it into the tick it arms, so a burst of N
+/// wakeups costs a single repaint while the trailing one still flushes.
+#[derive(Clone, Default, Debug)]
+pub(crate) struct TerminalRenderCoalescer(Arc<AtomicBool>);
+
+impl TerminalRenderCoalescer {
+    /// Records grid content as changed. Returns whether the caller must arm the
+    /// coalescing tick — `false` while one is already in flight, which is what
+    /// keeps a burst of N wakeups down to one repaint.
+    pub(crate) fn mark_dirty(&self) -> bool {
+        // `swap` hands back the previous state, so only the mark that found the
+        // flag clear has to arm a tick.
+        !self.0.swap(true, Ordering::AcqRel)
+    }
+
+    /// Claims the pending burst for the tick that just fired: `true` means this
+    /// tick must repaint, `false` that another tick already did. The flag clears
+    /// before the caller notifies, so output that lands in between arms a fresh
+    /// tick instead of being dropped.
+    pub(crate) fn claim_burst(&self) -> bool {
+        self.0.swap(false, Ordering::AcqRel)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum TerminalCommand {
@@ -84,6 +116,12 @@ impl GitCometView {
         window: &Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Ctrl+` belongs to the workspace, not to the shell: it has to hide the
+        // panel again while the terminal holds focus, so the interceptor must
+        // leave it for the key bindings to resolve.
+        if is_terminal_toggle_shortcut(keystroke) {
+            return;
+        }
         let Some(viewport) = self.focused_terminal_viewport(window, cx) else {
             return;
         };
@@ -178,7 +216,7 @@ impl GitCometView {
         cx.notify();
     }
 
-    pub(in crate::view) fn toggle_terminal_for_active_repo(
+    pub(crate) fn toggle_terminal_for_active_repo(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -428,6 +466,9 @@ impl GitCometView {
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
                 let rx = events_rx;
+                // One coalescer per event task, which is one per terminal
+                // instance; each armed tick gets its own clone.
+                let coalescer = TerminalRenderCoalescer::default();
                 while let Ok(event) = rx.recv().await {
                     if matches!(&event, TerminalBackendEvent::Exit) {
                         // The shell is already gone, so close this tab without a
@@ -448,12 +489,12 @@ impl GitCometView {
                         break;
                     }
 
-                    let result = view.update(cx, |this, cx| {
+                    let coalesce_tick = view.update(cx, |this, cx| {
                         let Some(session) = this.terminal_sessions.get_mut(&repo_id) else {
-                            return;
+                            return false;
                         };
                         let Some(instance) = session.instance_by_seq_mut(session_seq) else {
-                            return;
+                            return false;
                         };
 
                         match event {
@@ -462,12 +503,13 @@ impl GitCometView {
                                     instance.title = friendly_terminal_title(title);
                                     cx.notify();
                                 }
+                                false
                             }
-                            TerminalBackendEvent::Bell => {}
+                            TerminalBackendEvent::Bell => false,
                             TerminalBackendEvent::Exit => unreachable!(
                                 "terminal exit events are handled before instance updates"
                             ),
-                            TerminalBackendEvent::ChildExit(Some(0)) => {}
+                            TerminalBackendEvent::ChildExit(Some(0)) => false,
                             TerminalBackendEvent::ChildExit(code) => {
                                 let msg = match code {
                                     Some(c) => format!("Child process exited with code {c}"),
@@ -476,14 +518,15 @@ impl GitCometView {
                                 gitcomet_core::process::write_stderr_line(format_args!(
                                     "terminal child process: {msg}"
                                 ));
+                                false
                             }
                             TerminalBackendEvent::Wakeup
                             | TerminalBackendEvent::CursorBlinkingChange => {
-                                instance.viewport.update(cx, |viewport, cx| {
+                                instance.viewport.update(cx, |viewport, _cx| {
                                     viewport.content_epoch = viewport.content_epoch.wrapping_add(1);
-                                    cx.notify();
                                 });
-                                cx.notify();
+                                // One repaint per frame, not one per read batch.
+                                coalescer.mark_dirty()
                             }
                             TerminalBackendEvent::PtyWrite(data) => {
                                 // Terminal query responses (DSR, Device Attributes,
@@ -492,12 +535,42 @@ impl GitCometView {
                                 if let Some(ref pty) = instance.pty_sender {
                                     pty.write(data.into_bytes());
                                 }
+                                false
                             }
                         }
                     });
-                    if result.is_err() {
+                    let Ok(arm_tick) = coalesce_tick else {
                         break;
+                    };
+                    if !arm_tick {
+                        continue;
                     }
+                    // The app executor's timer, not smol's: it runs on the test
+                    // clock, like every other deferred repaint in this crate.
+                    let delay = cx
+                        .background_executor()
+                        .timer(TERMINAL_RENDER_COALESCE_INTERVAL);
+                    let burst = coalescer.clone();
+                    let entity = view.clone();
+                    cx.spawn(async move |cx: &mut gpui::AsyncApp| {
+                        delay.await;
+                        // Claiming before the repaint hands the next burst its
+                        // own tick; claiming after could drop a mark.
+                        if !burst.claim_burst() {
+                            return;
+                        }
+                        let _ = entity.update(cx, |this, cx| {
+                            let Some(session) = this.terminal_sessions.get_mut(&repo_id) else {
+                                return;
+                            };
+                            let Some(instance) = session.instance_by_seq_mut(session_seq) else {
+                                return;
+                            };
+                            instance.viewport.update(cx, |_, cx| cx.notify());
+                            cx.notify();
+                        });
+                    })
+                    .detach();
                 }
             },
         )
@@ -1674,6 +1747,19 @@ fn terminal_clipboard_shortcut_action(keystroke: &gpui::Keystroke) -> Option<Ter
     }
 }
 
+/// The `ToggleTerminal` hotkey as the keystroke interceptor sees it: Ctrl+
+/// backquote with nothing else held. Kept in step with the binding in
+/// `app::bindings::bind_app_keys`.
+fn is_terminal_toggle_shortcut(keystroke: &gpui::Keystroke) -> bool {
+    let mods = keystroke.modifiers;
+    keystroke.key == "`"
+        && mods.control
+        && !mods.alt
+        && !mods.shift
+        && !mods.platform
+        && !mods.function
+}
+
 #[cfg(test)]
 mod terminal_title_tests {
     use super::{MAX_TERMINAL_TITLE_CHARS, friendly_terminal_title, sanitize_terminal_title};
@@ -1697,5 +1783,29 @@ mod terminal_title_tests {
             friendly_terminal_title(long).chars().count(),
             MAX_TERMINAL_TITLE_CHARS
         );
+    }
+}
+
+#[cfg(test)]
+mod terminal_keystroke_tests {
+    use super::is_terminal_toggle_shortcut;
+    use gpui::Keystroke;
+
+    fn keystroke(source: &str) -> Keystroke {
+        Keystroke::parse(source).expect("parsable keystroke")
+    }
+
+    #[test]
+    fn only_bare_ctrl_backquote_is_left_for_the_workspace_toggle() {
+        assert!(
+            is_terminal_toggle_shortcut(&keystroke("ctrl-`")),
+            "the interceptor must not swallow the hotkey that hides the panel"
+        );
+        for source in ["`", "shift-`", "alt-`", "ctrl-shift-`", "ctrl-a", "ctrl-1"] {
+            assert!(
+                !is_terminal_toggle_shortcut(&keystroke(source)),
+                "`{source}` stays shell input"
+            );
+        }
     }
 }

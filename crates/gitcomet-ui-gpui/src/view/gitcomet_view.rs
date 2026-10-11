@@ -500,6 +500,10 @@ impl GitCometView {
                     self.prompt_init_repo(window, cx);
                 }
             }
+            // Same operation as the Ctrl+` hotkey, which reaches it through the
+            // `ToggleTerminal` action. The palette and the scenario driver call
+            // this directly because neither installs the app-level action
+            // handlers that the hotkey dispatch depends on.
             "toggle-terminal" => {
                 if let Some(window) = window {
                     self.toggle_terminal_for_active_repo(window, cx);
