@@ -56,8 +56,11 @@ impl GitCometView {
     }
 
     /// Closes whichever bottom-panel content the clicked tab stands for. The
-    /// terminal keeps its shutdown prompt: a tab with a live process asks first,
-    /// exactly as its own close button does.
+    /// terminal route only stows the panel: the session keeps running and the
+    /// terminal button brings it back, so nothing here asks about running
+    /// processes. The "terminate running commands?" prompt lives on the routes
+    /// that really end a session — closing a repository, closing the window,
+    /// quitting — and on a terminal tab's own `×`.
     fn close_bottom_panel_tab(
         &mut self,
         repo_id: RepoId,

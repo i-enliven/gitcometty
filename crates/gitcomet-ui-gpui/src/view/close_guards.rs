@@ -488,7 +488,6 @@ impl GitCometView {
                 (CloseScope::Application, self.state.repos.iter().collect())
             }
             TerminalShutdownAction::MoveRepo { .. }
-            | TerminalShutdownAction::CloseTerminalForRepo { .. }
             | TerminalShutdownAction::CloseTerminalTab { .. } => return Vec::new(),
         };
         let mut reasons: Vec<SharedString> = repos

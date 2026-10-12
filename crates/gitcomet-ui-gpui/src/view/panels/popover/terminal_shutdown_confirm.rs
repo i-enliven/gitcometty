@@ -18,7 +18,6 @@ pub(super) fn panel(
         TerminalShutdownAction::MoveRepo { .. } => "Move repository?".to_string(),
         TerminalShutdownAction::CloseRepos { .. } => "Close terminals?".to_string(),
         TerminalShutdownAction::CloseRepo { .. }
-        | TerminalShutdownAction::CloseTerminalForRepo { .. }
         | TerminalShutdownAction::CloseTerminalTab { .. } => "Close terminal?".to_string(),
     };
     let confirm_label = match prompt.action {
@@ -28,7 +27,6 @@ pub(super) fn panel(
         TerminalShutdownAction::MoveRepo { .. } => "Terminate and move",
         TerminalShutdownAction::CloseRepos { .. } => "Terminate and close",
         TerminalShutdownAction::CloseRepo { .. }
-        | TerminalShutdownAction::CloseTerminalForRepo { .. }
         | TerminalShutdownAction::CloseTerminalTab { .. } => "Terminate and close",
     };
     let detail = if prompt.summary.running_command_count == 1 {

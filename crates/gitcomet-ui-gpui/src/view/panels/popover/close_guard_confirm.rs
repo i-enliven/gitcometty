@@ -22,7 +22,6 @@ pub(super) fn panel(
         }
         TerminalShutdownAction::CloseWindow
         | TerminalShutdownAction::MoveRepo { .. }
-        | TerminalShutdownAction::CloseTerminalForRepo { .. }
         | TerminalShutdownAction::CloseTerminalTab { .. } => {
             ("Close window?".to_string(), "Close anyway")
         }

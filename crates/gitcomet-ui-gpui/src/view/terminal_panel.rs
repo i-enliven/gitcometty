@@ -582,23 +582,6 @@ impl GitCometView {
         .detach();
     }
 
-    pub(super) fn close_terminal_for_repo(
-        &mut self,
-        repo_id: RepoId,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if let Some(session) = self.terminal_sessions.remove(&repo_id) {
-            for instance in &session.instances {
-                shutdown_terminal_instance(instance, false);
-            }
-        }
-        if !self.active_repo_has_open_terminal() {
-            self.deactivate_terminal_cursor_blink();
-        }
-        self.sync_terminal_indicator_views(cx);
-        cx.notify();
-    }
-
     /// Stow the panel without touching the session: no PTY shutdown, no removal,
     /// no cursor-blink teardown. The flag lives on the session, so closing the
     /// repo, the window or the app still takes the whole session with it.
@@ -791,8 +774,7 @@ impl GitCometView {
     ) -> TerminalShutdownSummary {
         match action {
             TerminalShutdownAction::CloseRepo { repo_id }
-            | TerminalShutdownAction::MoveRepo { repo_id, .. }
-            | TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
+            | TerminalShutdownAction::MoveRepo { repo_id, .. } => {
                 let mut summary = self
                     .terminal_sessions
                     .get(repo_id)
@@ -952,9 +934,6 @@ impl GitCometView {
                     target_workspace,
                 );
             }
-            TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
-                self.close_terminal_for_repo(repo_id, cx);
-            }
             TerminalShutdownAction::CloseTerminalTab {
                 repo_id,
                 session_seq,
@@ -998,17 +977,6 @@ impl GitCometView {
                 cx.defer(crate::app::finish_quit_or_restart);
             }
         }
-    }
-
-    pub(super) fn request_close_terminal_for_repo(
-        &mut self,
-        repo_id: RepoId,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        self.request_terminal_shutdown_action(
-            TerminalShutdownAction::CloseTerminalForRepo { repo_id },
-            cx,
-        )
     }
 
     fn request_close_terminal_tab(
@@ -1092,9 +1060,6 @@ impl GitCometView {
 
         let (viewport_entity, session_seq, tabs, active_index) = {
             let session = self.terminal_sessions.get(&active_repo)?;
-            if session.panel_hidden {
-                return None;
-            }
             let active = session.active_instance()?;
             let tabs: Vec<SharedString> = session
                 .instances
@@ -1422,9 +1387,7 @@ impl GitCometView {
                             controls::ControlActivation::Action,
                             cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
                                 cx.stop_propagation();
-                                if !this.request_close_terminal_for_repo(close_repo, cx) {
-                                    this.close_terminal_for_repo(close_repo, cx);
-                                }
+                                this.hide_terminal_panel_for_repo(close_repo, cx);
                             }),
                         ),
                     ),
@@ -1683,8 +1646,7 @@ fn terminal_instance_has_running_command(instance: &TerminalInstance) -> bool {
 fn terminate_terminals_for_action(view: &mut GitCometView, action: &TerminalShutdownAction) {
     match action {
         TerminalShutdownAction::CloseRepo { repo_id }
-        | TerminalShutdownAction::MoveRepo { repo_id, .. }
-        | TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
+        | TerminalShutdownAction::MoveRepo { repo_id, .. } => {
             if let Some(session) = view.terminal_sessions.get(repo_id) {
                 for instance in &session.instances {
                     terminate_terminal_process_group(instance.child_pid);

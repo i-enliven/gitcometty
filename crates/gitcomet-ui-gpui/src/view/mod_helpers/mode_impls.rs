@@ -1115,9 +1115,6 @@ pub(in crate::view) enum TerminalShutdownAction {
         path: std::path::PathBuf,
         target_workspace: Option<gitcomet_state::session::WorkspaceId>,
     },
-    CloseTerminalForRepo {
-        repo_id: RepoId,
-    },
     CloseTerminalTab {
         repo_id: RepoId,
         session_seq: u64,

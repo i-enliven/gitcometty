@@ -382,7 +382,7 @@ fn closing_the_terminal_panel_hides_it_and_keeps_the_session_alive(cx: &mut gpui
             this.hide_terminal_panel_for_repo(repo_id, cx);
 
             let theme = this.theme;
-            assert!(this.render_terminal_panel(theme, window, cx).is_none());
+            assert!(this.render_bottom_panel(theme, window, cx).is_none());
             let session = this
                 .terminal_sessions
                 .get(&repo_id)
@@ -406,6 +406,11 @@ fn showing_a_hidden_terminal_panel_restores_the_same_session(cx: &mut gpui::Test
                 repo_id,
                 test_terminal_session(vec![(51, Some(events_rx))], 0, cx),
             );
+            let viewport_before = this.terminal_sessions[&repo_id]
+                .instance_by_seq(51)
+                .expect("the session under test")
+                .viewport
+                .entity_id();
             this.hide_terminal_panel_for_repo(repo_id, cx);
             this.show_terminal_panel_for_repo(repo_id, window, cx);
 
@@ -414,7 +419,15 @@ fn showing_a_hidden_terminal_panel_restores_the_same_session(cx: &mut gpui::Test
                 .get(&repo_id)
                 .expect("shown session is the one that was hidden");
             assert!(!session.panel_hidden);
-            assert!(session.instance_by_seq(51).is_some());
+            let restored = session
+                .instance_by_seq(51)
+                .expect("the same tab, not a respawned one");
+            assert_eq!(
+                restored.viewport.entity_id(),
+                viewport_before,
+                "showing the panel must return the same viewport entity, so a respawn \
+                 with a fresh shell cannot pass"
+            );
             assert_eq!(
                 this.active_bottom_panel.get(&repo_id),
                 Some(&BottomPanelTab::Terminal)
@@ -507,11 +520,47 @@ fn closing_the_repo_still_kills_a_hidden_terminal_session(cx: &mut gpui::TestApp
                 test_terminal_session(vec![(55, Some(events_rx))], 0, cx),
             );
             this.hide_terminal_panel_for_repo(repo_id, cx);
-            this.close_terminal_for_repo(repo_id, cx);
-
-            assert!(!this.terminal_sessions.contains_key(&repo_id));
             drop(events_tx);
+            // `test_root_view_with_active_repo` only set the view's copy of the
+            // state. Seed the store with the same snapshot so closing the repo
+            // below removes a repository the store actually has.
+            let state = this.state.clone();
+            this.store.replace_snapshot_for_test(state);
         })
+    });
+
+    // The route a repository tab's `x` takes. Nothing is running, so no prompt
+    // is queued and the close goes straight to the store.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.request_close_repos(vec![repo_id], None, cx)
+        });
+    });
+    let store = cx.update(|_window, app| view.read(app).store.clone());
+    for _ in 0..600 {
+        if store.snapshot().repos.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        store.snapshot().repos.is_empty(),
+        "the store never dropped the repository"
+    );
+    // The app layer pushes that snapshot to the view; `apply_state_snapshot`
+    // is what takes the session with the repository.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        })
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        assert!(
+            !view.read(app).terminal_sessions.contains_key(&repo_id),
+            "hiding the panel must not shield the session from closing the repo"
+        );
     });
 }
 

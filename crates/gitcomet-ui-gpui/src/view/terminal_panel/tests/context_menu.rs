@@ -682,7 +682,12 @@ fn terminal_session_disappearance_dismisses_menu_and_rejects_late_actions(
                 term.lock().input('B');
                 let viewport = replacement.viewport.clone();
                 if remove_repo {
-                    root.close_terminal_for_repo(fixture.repo_id, cx);
+                    // There is no whole-session kill route any more: the panel's
+                    // close button hides. The origin session simply goes, and
+                    // the indicator sync is what dismisses the stale menu.
+                    root.terminal_sessions.remove(&fixture.repo_id);
+                    root.sync_terminal_indicator_views(cx);
+                    cx.notify();
                     root.terminal_sessions.insert(
                         fixture.repo_id,
                         RepoTerminalSession {
