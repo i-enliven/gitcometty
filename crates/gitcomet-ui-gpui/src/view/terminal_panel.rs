@@ -526,7 +526,13 @@ impl GitCometView {
                             TerminalBackendEvent::Title(title) => {
                                 if !title.is_empty() {
                                     instance.title = friendly_terminal_title(title);
-                                    cx.notify();
+                                    // The title state stays current even while the
+                                    // panel is hidden, so the header shows the real
+                                    // name the moment it comes back; only the repaint
+                                    // of an unmounted header is suppressed.
+                                    if !panel_hidden {
+                                        cx.notify();
+                                    }
                                 }
                                 false
                             }

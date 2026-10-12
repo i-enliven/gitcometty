@@ -695,14 +695,14 @@ fn a_hidden_terminal_reads_as_closed_on_the_action_bar_and_live_on_the_repo_tab(
             view.read(app)
                 .action_bar
                 .read(app)
-                .open_terminal_repo_ids
+                .open_terminal_repo_ids_for_tests()
                 .contains(&repo_id)
         );
         assert!(
             view.read(app)
                 .repo_tabs_bar
                 .read(app)
-                .live_terminal_repo_ids
+                .live_terminal_repo_ids_for_tests()
                 .contains(&repo_id)
         );
     });
@@ -720,7 +720,7 @@ fn a_hidden_terminal_reads_as_closed_on_the_action_bar_and_live_on_the_repo_tab(
                 .read(app)
                 .action_bar
                 .read(app)
-                .open_terminal_repo_ids
+                .open_terminal_repo_ids_for_tests()
                 .contains(&repo_id),
             "the action-bar button controls visibility, so a hidden session must read \
              unselected with the \"Show terminal\" tooltip"
@@ -729,7 +729,7 @@ fn a_hidden_terminal_reads_as_closed_on_the_action_bar_and_live_on_the_repo_tab(
             view.read(app)
                 .repo_tabs_bar
                 .read(app)
-                .live_terminal_repo_ids
+                .live_terminal_repo_ids_for_tests()
                 .contains(&repo_id),
             "the repo tab marker follows liveness, so a hidden session keeps its marker"
         );
@@ -771,5 +771,114 @@ fn clicking_the_terminal_panel_close_button_hides_the_panel_and_keeps_the_sessio
     assert!(
         cx.debug_bounds("terminal_context_surface").is_none(),
         "the panel must actually go away"
+    );
+}
+
+#[gpui::test]
+fn a_hidden_terminal_title_update_updates_the_title_without_repainting(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    let events_tx = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let (events_tx, events_rx) = smol::channel::unbounded();
+            this.terminal_sessions.insert(
+                repo_id,
+                test_terminal_session(vec![(65, Some(events_rx))], 0, cx),
+            );
+            this.spawn_terminal_event_task(repo_id, 65, cx);
+            this.hide_terminal_panel_for_repo(repo_id, cx);
+            events_tx
+        })
+    });
+    // Hiding notifies the view itself and defers the indicator sync; settle both
+    // before the observer goes on so only the title event is counted.
+    cx.run_until_parked();
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let _subscription = cx.update(|_window, app| {
+        let notified = std::rc::Rc::clone(&notified);
+        app.observe(&view, move |_, _| notified.set(notified.get() + 1))
+    });
+
+    events_tx
+        .try_send(TerminalBackendEvent::Title("vim".to_string()))
+        .expect("send terminal title");
+    cx.run_until_parked();
+
+    assert_eq!(
+        notified.get(),
+        0,
+        "an OSC title from a hidden session must not repaint a window that paints nothing"
+    );
+    assert_eq!(
+        cx.update(|_window, app| view
+            .read(app)
+            .terminal_sessions
+            .get(&repo_id)
+            .and_then(|session| session.instance_by_seq(65))
+            .expect("the session under test")
+            .title
+            .clone()),
+        "vim",
+        "only the repaint is suppressed: the title state must keep tracking so the \
+         header shows the real name the moment the panel returns"
+    );
+}
+
+#[gpui::test]
+fn a_burst_armed_before_hiding_does_not_repaint_after_hiding(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    let events_tx = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let (events_tx, events_rx) = smol::channel::unbounded();
+            this.terminal_sessions.insert(
+                repo_id,
+                test_terminal_session(vec![(66, Some(events_rx))], 0, cx),
+            );
+            this.spawn_terminal_event_task(repo_id, 66, cx);
+            events_tx
+        })
+    });
+    let viewport = cx.update(|_window, app| {
+        view.read(app)
+            .terminal_viewport_for_session(repo_id, 66)
+            .expect("the session under test")
+    });
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let _subscription = cx.update(|_window, app| {
+        let notified = std::rc::Rc::clone(&notified);
+        app.observe(&viewport, move |_, _| notified.set(notified.get() + 1))
+    });
+    let epoch_before = cx.update(|_window, app| viewport.read(app).content_epoch);
+
+    // Arm the coalescing tick while the panel is still on screen.
+    events_tx
+        .try_send(TerminalBackendEvent::Wakeup)
+        .expect("send terminal wakeup");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_window, app| viewport.read(app).content_epoch),
+        epoch_before + 1,
+        "the wakeup must reach the instance, which is what arms the coalescing tick"
+    );
+    assert_eq!(notified.get(), 0, "and it waits for its tick");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.hide_terminal_panel_for_repo(repo_id, cx)
+        });
+    });
+
+    cx.executor()
+        .advance_clock(TERMINAL_RENDER_COALESCE_INTERVAL + Duration::from_millis(1));
+    cx.run_until_parked();
+    assert_eq!(
+        notified.get(),
+        0,
+        "the tick fires after the panel went away, so it must repaint nothing"
     );
 }

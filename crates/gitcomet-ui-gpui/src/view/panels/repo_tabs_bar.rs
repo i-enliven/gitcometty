@@ -13,7 +13,7 @@ pub(in super::super) struct RepoTabsBarView {
     theme: AppTheme,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
-    pub(in crate::view) live_terminal_repo_ids: FxHashSet<RepoId>,
+    live_terminal_repo_ids: FxHashSet<RepoId>,
     external_folder_drag_active: bool,
     external_folder_drag_hovered: bool,
 
@@ -673,6 +673,12 @@ impl RepoTabsBarView {
     #[cfg(test)]
     pub(in crate::view) fn external_folder_drag_hovered_for_tests(&self) -> bool {
         self.external_folder_drag_hovered
+    }
+
+    /// Repos with a live terminal session, hidden panel or not.
+    #[cfg(test)]
+    pub(in crate::view) fn live_terminal_repo_ids_for_tests(&self) -> FxHashSet<RepoId> {
+        self.live_terminal_repo_ids.clone()
     }
 
     fn active_repo_id(&self) -> Option<RepoId> {

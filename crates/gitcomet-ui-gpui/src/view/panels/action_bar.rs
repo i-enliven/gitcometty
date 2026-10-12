@@ -266,7 +266,7 @@ pub(in super::super) struct ActionBarView {
     root_view: WeakEntity<GitCometView>,
     notify_fingerprint: u64,
     active_context_menu_invoker: Option<SharedString>,
-    pub(in crate::view) open_terminal_repo_ids: FxHashSet<RepoId>,
+    open_terminal_repo_ids: FxHashSet<RepoId>,
     terminal_button_target: TerminalButtonTarget,
 }
 
@@ -374,6 +374,13 @@ impl ActionBarView {
             self.open_terminal_repo_ids = next;
             cx.notify();
         }
+    }
+
+    /// Repos whose action-bar Terminal button reads selected, i.e. the panel is
+    /// visible for them.
+    #[cfg(test)]
+    pub(in crate::view) fn open_terminal_repo_ids_for_tests(&self) -> FxHashSet<RepoId> {
+        self.open_terminal_repo_ids.clone()
     }
 
     pub(in crate::view) fn set_terminal_button_target(
