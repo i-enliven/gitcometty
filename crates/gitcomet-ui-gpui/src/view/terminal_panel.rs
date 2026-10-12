@@ -88,6 +88,18 @@ enum TerminalSurvivorFocusPolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TerminalPanelResizeDrag;
 
+/// The header's maximize control as a glyph and a tooltip, which always swap
+/// together. One pure source for both, so the pair is pinned without painting
+/// the header: the toolkit's paint assertions can see a control's fill and
+/// border quads, but not which SVG glyph drew inside them.
+fn terminal_panel_maximize_control(maximized: bool) -> (&'static str, &'static str) {
+    if maximized {
+        ("icons/generic_restore.svg", "Restore panel height")
+    } else {
+        ("icons/generic_maximize.svg", "Maximize terminal")
+    }
+}
+
 impl GitCometView {
     /// Returns the viewport of the embedded terminal that currently holds
     /// keyboard focus in `window`, if any.
@@ -1095,6 +1107,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let active_repo = self.active_repo_id()?;
+        let maximized = self.terminal_panel_maximized;
 
         let (viewport_entity, session_seq, tabs, active_index) = {
             let session = self.terminal_sessions.get(&active_repo)?;
@@ -1184,7 +1197,11 @@ impl GitCometView {
             div()
                 .flex()
                 .flex_col()
-                .h(self.terminal_panel_height)
+                // Maximized, the panel is stretched over the main content by the
+                // enclosing column, so its own height is parked rather than
+                // rewritten; the drag handle is off the layout for the duration.
+                .when(!maximized, |d| d.h(self.terminal_panel_height))
+                .when(maximized, |d| d.flex_1())
                 .min_h(px(TERMINAL_PANEL_MIN_HEIGHT_PX))
                 .bg(terminal_default_background(theme))
                 // A focus ring along the top edge reinforces that the terminal is
@@ -1220,6 +1237,8 @@ impl GitCometView {
             .filter(|instance| instance.viewport.read(cx).term_lock.is_some())
             .map(|instance| instance.session_seq);
         let close_repo = active_repo;
+        let maximized = self.terminal_panel_maximized;
+        let (maximize_icon, maximize_tip) = terminal_panel_maximize_control(maximized);
         let repo_id = active_repo;
         let ui_scale = crate::ui_scale::UiScale::current(cx);
         let control_height = components::control_height(ui_scale);
@@ -1414,6 +1433,18 @@ impl GitCometView {
                         ),
                     )
                     .child(
+                        icon_btn("terminal_maximize", maximize_icon, maximize_tip, false)
+                            .debug_selector(|| "terminal_maximize".to_string())
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Action,
+                                cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    this.toggle_terminal_panel_maximized(cx);
+                                }),
+                            ),
+                    )
+                    .child(
                         icon_btn(
                             "terminal_close",
                             "icons/generic_close.svg",
@@ -1490,6 +1521,28 @@ impl GitCometView {
         self.open_external_terminal_for_repo(repo_id, cx);
     }
 
+    /// Maximize the bottom panel over the commit list and diff, or restore the
+    /// height it had before. While maximized the panel is sized by `flex_1`, so
+    /// `terminal_panel_height` is simply parked: dragging is off the layout and
+    /// the field is untouched until the restore. Per-window state — nothing here
+    /// is persisted.
+    pub(in crate::view) fn toggle_terminal_panel_maximized(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.terminal_panel_maximized {
+            self.terminal_panel_maximized = false;
+            self.terminal_panel_height = self
+                .terminal_panel_height_before_maximize
+                .take()
+                .unwrap_or(px(TERMINAL_PANEL_DEFAULT_HEIGHT_PX));
+        } else {
+            self.terminal_panel_height_before_maximize = Some(self.terminal_panel_height);
+            self.terminal_panel_maximized = true;
+        }
+        cx.notify();
+    }
+
     pub(super) fn terminal_panel_resize_handle(
         &mut self,
         theme: AppTheme,
@@ -1498,6 +1551,7 @@ impl GitCometView {
         gpui::div()
             .id("terminal_panel_resize")
             .group("terminal_panel_resize")
+            .debug_selector(|| "terminal_panel_resize".to_string())
             .h(px(TERMINAL_PANEL_RESIZE_HANDLE_PX))
             .w_full()
             .cursor(CursorStyle::ResizeUpDown)

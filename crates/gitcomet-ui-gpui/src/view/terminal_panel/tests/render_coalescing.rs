@@ -176,10 +176,29 @@ fn terminal_title_updates_still_notify_immediately(cx: &mut gpui::TestAppContext
         })
     });
 
+    // Flush anything the view had already deferred at construction, so the
+    // root-view count below observes this title event and nothing else.
+    cx.run_until_parked();
+
+    // The stored title alone cannot tell a live repaint from a guard that has
+    // been inverted, so watch the root view: the panel is visible here, so a
+    // title change must notify immediately.
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0usize));
+    let _root_subscription = cx.update(|_window, app| {
+        let notified = std::rc::Rc::clone(&notified);
+        app.observe(&view, move |_, _| notified.set(notified.get() + 1))
+    });
+
     events_tx
         .try_send(TerminalBackendEvent::Title("cargo test".to_string()))
         .expect("send terminal title");
     cx.run_until_parked();
+
+    assert_eq!(
+        notified.get(),
+        1,
+        "a title event repaints the visible panel at once, without a coalescing tick"
+    );
 
     // No clock advance: a tab title is rare and correctness-critical, so it is
     // never held back by the render coalescer.

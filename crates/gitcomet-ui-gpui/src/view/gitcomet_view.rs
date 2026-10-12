@@ -1957,6 +1957,8 @@ impl GitCometView {
             terminal_preferences,
             terminal_sessions: FxHashMap::default(),
             terminal_panel_height: px(TERMINAL_PANEL_DEFAULT_HEIGHT_PX),
+            terminal_panel_maximized: false,
+            terminal_panel_height_before_maximize: None,
             terminal_panel_resize: None,
             next_terminal_session_seq: 1,
             terminal_cursor_blink_visible: true,

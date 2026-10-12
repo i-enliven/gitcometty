@@ -116,6 +116,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let repo_id = self.active_repo_id()?;
+        let maximized = self.terminal_panel_maximized;
         let providers = self.bottom_panel_providers.clone();
         let tabs: Vec<BottomPanelTab> = providers
             .iter()
@@ -144,7 +145,10 @@ impl GitCometView {
                 div()
                     .flex()
                     .flex_col()
-                    .h(self.terminal_panel_height)
+                    // See `render_terminal_panel`: a maximized panel is sized by
+                    // the enclosing column, not by the parked height.
+                    .when(!maximized, |d| d.h(self.terminal_panel_height))
+                    .when(maximized, |d| d.flex_1())
                     .min_h(self.ui_scale().px(REFLOG_PANEL_MIN_HEIGHT_PX))
                     .child(content)
                     .into_any(),
@@ -167,7 +171,10 @@ impl GitCometView {
             div()
                 .flex()
                 .flex_col()
-                .h(self.terminal_panel_height + tab_bar_height)
+                .when(!maximized, |d| {
+                    d.h(self.terminal_panel_height + tab_bar_height)
+                })
+                .when(maximized, |d| d.flex_1())
                 .min_h(self.ui_scale().px(REFLOG_PANEL_MIN_HEIGHT_PX) + tab_bar_height)
                 .child(tab_bar)
                 .child(div().flex_1().min_h(px(0.0)).child(content))
