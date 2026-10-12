@@ -1520,8 +1520,9 @@ impl TerminalViewportView {
             // with `+ disp_off` — matching the background rects above. Painting
             // `sel_row` directly left the highlight glued to fixed screen rows when
             // scrolled. The row span is clamped to the visible window up front: a
-            // selection can now cover the whole scrollback, and iterating all
-            // 10_000 rows every frame to skip most of them would be wasteful.
+            // selection can now cover the whole scrollback, and iterating all of
+            // `TERMINAL_SCROLLBACK_ROWS` every frame to skip most of them would
+            // be wasteful.
             if let Some((start, end)) = self
                 .selection_start
                 .zip(self.selection_end)

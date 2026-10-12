@@ -56,8 +56,11 @@ impl GitCometView {
     }
 
     /// Closes whichever bottom-panel content the clicked tab stands for. The
-    /// terminal keeps its shutdown prompt: a tab with a live process asks first,
-    /// exactly as its own close button does.
+    /// terminal route only stows the panel: the session keeps running and the
+    /// terminal button brings it back, so nothing here asks about running
+    /// processes. The "terminate running commands?" prompt lives on the routes
+    /// that really end a session — closing a repository, closing the window,
+    /// quitting — and on a terminal tab's own `×`.
     fn close_bottom_panel_tab(
         &mut self,
         repo_id: RepoId,
@@ -113,6 +116,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let repo_id = self.active_repo_id()?;
+        let maximized = self.terminal_panel_maximized;
         let providers = self.bottom_panel_providers.clone();
         let tabs: Vec<BottomPanelTab> = providers
             .iter()
@@ -141,7 +145,10 @@ impl GitCometView {
                 div()
                     .flex()
                     .flex_col()
-                    .h(self.terminal_panel_height)
+                    // See `render_terminal_panel`: a maximized panel is sized by
+                    // the enclosing column, not by the parked height.
+                    .when(!maximized, |d| d.h(self.terminal_panel_height))
+                    .when(maximized, |d| d.flex_1())
                     .min_h(self.ui_scale().px(REFLOG_PANEL_MIN_HEIGHT_PX))
                     .child(content)
                     .into_any(),
@@ -164,10 +171,23 @@ impl GitCometView {
             div()
                 .flex()
                 .flex_col()
-                .h(self.terminal_panel_height + tab_bar_height)
+                .when(!maximized, |d| {
+                    d.h(self.terminal_panel_height + tab_bar_height)
+                })
+                .when(maximized, |d| d.flex_1())
                 .min_h(self.ui_scale().px(REFLOG_PANEL_MIN_HEIGHT_PX) + tab_bar_height)
                 .child(tab_bar)
-                .child(div().flex_1().min_h(px(0.0)).child(content))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        // Maximized, this area has to become a flex column: the
+                        // showing panel drops its fixed height for `flex_1`, and
+                        // a block container measures such a child back down to
+                        // its minimum instead of stretching it to the panel.
+                        .when(maximized, |d| d.flex().flex_col())
+                        .child(content),
+                )
                 .into_any(),
         )
     }

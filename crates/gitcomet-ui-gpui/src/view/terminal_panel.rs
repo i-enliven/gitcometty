@@ -88,17 +88,38 @@ enum TerminalSurvivorFocusPolicy {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TerminalPanelResizeDrag;
 
+/// The header's maximize control as a glyph and a tooltip, which always swap
+/// together. One pure source for both, so the pair is pinned without painting
+/// the header: the toolkit's paint assertions can see a control's fill and
+/// border quads, but not which SVG glyph drew inside them.
+fn terminal_panel_maximize_control(maximized: bool) -> (&'static str, &'static str) {
+    if maximized {
+        ("icons/generic_restore.svg", "Restore panel height")
+    } else {
+        ("icons/generic_maximize.svg", "Maximize terminal")
+    }
+}
+
 impl GitCometView {
     /// Returns the viewport of the embedded terminal that currently holds
     /// keyboard focus in `window`, if any.
+    ///
+    /// Stowed sessions are skipped rather than trusted: hiding the panel leaves
+    /// the viewport entity — and its [`gpui::FocusHandle`] — mounted, and gpui
+    /// only mutates the window's focus in `focus()`/`blur()`, so an unmounted
+    /// handle keeps comparing focused. Without this filter the keystroke
+    /// interceptor would keep pouring every keystroke into an invisible shell
+    /// and swallowing it, so app shortcuts and typing would look dead until the
+    /// user clicked something focusable.
     pub(super) fn focused_terminal_viewport(
         &self,
         window: &Window,
         cx: &gpui::App,
     ) -> Option<Entity<TerminalViewportView>> {
         self.terminal_sessions
-            .values()
-            .flat_map(|session| session.instances.iter())
+            .iter()
+            .filter(|(_, session)| !session.panel_hidden)
+            .flat_map(|(_, session)| session.instances.iter())
             .find(|instance| instance.viewport.read(cx).focus_handle.is_focused(window))
             .map(|instance| instance.viewport.clone())
     }
@@ -228,13 +249,17 @@ impl GitCometView {
         let workdir = repo.spec.workdir.clone();
         let repo_name = terminal_repo_name(&repo.spec.workdir);
 
-        if self.terminal_sessions.contains_key(&repo_id) {
-            if !self.request_close_terminal_for_repo(repo_id, cx) {
-                self.close_terminal_for_repo(repo_id, cx);
-            }
-            return;
+        // Three-way: no session spawns, a hidden session comes back, a visible
+        // one is stowed. Neither the hide nor the show branch touches the PTY.
+        let stowed = self
+            .terminal_sessions
+            .get(&repo_id)
+            .map(|session| session.panel_hidden);
+        match stowed {
+            Some(true) => self.show_terminal_panel_for_repo(repo_id, window, cx),
+            Some(false) => self.hide_terminal_panel_for_repo(repo_id, cx),
+            None => self.open_terminal_for_repo(repo_id, workdir, repo_name, window, cx),
         }
-        self.open_terminal_for_repo(repo_id, workdir, repo_name, window, cx);
     }
 
     pub(in crate::view) fn activate_terminal_button_for_active_repo(
@@ -273,19 +298,23 @@ impl GitCometView {
     }
 
     fn sync_terminal_indicator_views(&mut self, cx: &mut gpui::Context<Self>) {
-        let repo_ids = self
+        // Two different questions, two different sets: the repo tab marker asks
+        // "is a shell running for this repo", the action-bar button asks "is the
+        // panel on screen", so a hidden session reads closed on the button while
+        // its tab keeps the marker.
+        let live: FxHashSet<RepoId> = self.terminal_sessions.keys().copied().collect();
+        let visible: FxHashSet<RepoId> = self
             .terminal_sessions
-            .keys()
-            .copied()
-            .collect::<FxHashSet<RepoId>>();
+            .iter()
+            .filter(|(_, session)| !session.panel_hidden)
+            .map(|(repo_id, _)| *repo_id)
+            .collect();
         let repo_tabs_bar = self.repo_tabs_bar.clone();
         let action_bar = self.action_bar.clone();
         let popover_host = self.popover_host.clone();
         cx.defer(move |cx| {
-            repo_tabs_bar.update(cx, |bar, cx| {
-                bar.set_open_terminal_repo_ids(repo_ids.clone(), cx)
-            });
-            action_bar.update(cx, |bar, cx| bar.set_open_terminal_repo_ids(repo_ids, cx));
+            repo_tabs_bar.update(cx, |bar, cx| bar.set_live_terminal_repo_ids(live, cx));
+            action_bar.update(cx, |bar, cx| bar.set_open_terminal_repo_ids(visible, cx));
             popover_host.update(cx, |host, cx| host.dismiss_stale_terminal_menu(cx));
         });
     }
@@ -314,7 +343,10 @@ impl GitCometView {
         if removed_repo_ids.is_empty() {
             return;
         }
+        let active_repo_id = self.active_repo_id();
+        let mut active_session_removed = false;
         for repo_id in removed_repo_ids {
+            active_session_removed |= Some(repo_id) == active_repo_id;
             if let Some(session) = self.terminal_sessions.remove(&repo_id) {
                 for instance in &session.instances {
                     if let Some(pty) = &instance.pty_sender {
@@ -322,6 +354,11 @@ impl GitCometView {
                     }
                 }
             }
+        }
+        if active_session_removed {
+            // The repository whose panel was on screen is gone, and with it the
+            // header holding the maximize control.
+            self.clear_terminal_panel_maximize();
         }
         if !self.active_repo_has_open_terminal() {
             self.deactivate_terminal_cursor_blink();
@@ -355,6 +392,7 @@ impl GitCometView {
                 repo_name,
                 instances: vec![instance],
                 active_index: 0,
+                panel_hidden: false,
             },
         );
 
@@ -447,6 +485,21 @@ impl GitCometView {
         })
     }
 
+    /// Whether a PTY wakeup for this instance should arm a coalesced repaint.
+    /// A hidden panel paints nothing, so a parked session must not wake the
+    /// whole window at up to 60 Hz.
+    pub(in crate::view) fn terminal_repaint_should_schedule(
+        &self,
+        repo_id: RepoId,
+        session_seq: u64,
+    ) -> bool {
+        self.terminal_sessions
+            .get(&repo_id)
+            .filter(|session| !session.panel_hidden)
+            .and_then(|session| session.instance_by_seq(session_seq))
+            .is_some()
+    }
+
     fn spawn_terminal_event_task(
         &mut self,
         repo_id: RepoId,
@@ -493,6 +546,7 @@ impl GitCometView {
                         let Some(session) = this.terminal_sessions.get_mut(&repo_id) else {
                             return false;
                         };
+                        let panel_hidden = session.panel_hidden;
                         let Some(instance) = session.instance_by_seq_mut(session_seq) else {
                             return false;
                         };
@@ -501,7 +555,13 @@ impl GitCometView {
                             TerminalBackendEvent::Title(title) => {
                                 if !title.is_empty() {
                                     instance.title = friendly_terminal_title(title);
-                                    cx.notify();
+                                    // The title state stays current even while the
+                                    // panel is hidden, so the header shows the real
+                                    // name the moment it comes back; only the repaint
+                                    // of an unmounted header is suppressed.
+                                    if !panel_hidden {
+                                        cx.notify();
+                                    }
                                 }
                                 false
                             }
@@ -525,6 +585,13 @@ impl GitCometView {
                                 instance.viewport.update(cx, |viewport, _cx| {
                                     viewport.content_epoch = viewport.content_epoch.wrapping_add(1);
                                 });
+                                // The epoch bump stays unconditional: a parked session
+                                // must still be marked dirty so the first paint after
+                                // unhiding rebuilds from the real buffer. Only the
+                                // repaint arming is suppressed.
+                                if panel_hidden {
+                                    return false;
+                                }
                                 // One repaint per frame, not one per read batch.
                                 coalescer.mark_dirty()
                             }
@@ -560,6 +627,11 @@ impl GitCometView {
                             return;
                         }
                         let _ = entity.update(cx, |this, cx| {
+                            // A burst armed while the panel was visible must not
+                            // notify once it has been hidden in the meantime.
+                            if !this.terminal_repaint_should_schedule(repo_id, session_seq) {
+                                return;
+                            }
                             let Some(session) = this.terminal_sessions.get_mut(&repo_id) else {
                                 return;
                             };
@@ -577,20 +649,42 @@ impl GitCometView {
         .detach();
     }
 
-    pub(super) fn close_terminal_for_repo(
+    /// Stow the panel without touching the session: no PTY shutdown, no removal,
+    /// no cursor-blink teardown. The flag lives on the session, so closing the
+    /// repo, the window or the app still takes the whole session with it.
+    pub(in crate::view) fn hide_terminal_panel_for_repo(
         &mut self,
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) {
-        if let Some(session) = self.terminal_sessions.remove(&repo_id) {
-            for instance in &session.instances {
-                shutdown_terminal_instance(instance, false);
-            }
+        if let Some(session) = self.terminal_sessions.get_mut(&repo_id) {
+            session.panel_hidden = true;
         }
-        if !self.active_repo_has_open_terminal() {
-            self.deactivate_terminal_cursor_blink();
-        }
+        // The header, and with it the only maximize control, goes off screen
+        // with the panel: restore the parked height rather than stranding the
+        // panel stretched over the commit list.
+        self.clear_terminal_panel_maximize();
         self.sync_terminal_indicator_views(cx);
+        cx.notify();
+    }
+
+    /// Bring a stowed panel back: the same session, the same PTY, the same
+    /// viewport entity.
+    pub(in crate::view) fn show_terminal_panel_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(session) = self.terminal_sessions.get_mut(&repo_id) else {
+            return;
+        };
+        session.panel_hidden = false;
+        self.active_bottom_panel
+            .insert(repo_id, BottomPanelTab::Terminal);
+        self.reset_terminal_cursor_blink(cx);
+        self.sync_terminal_indicator_views(cx);
+        self.focus_terminal_view(repo_id, window, cx);
         cx.notify();
     }
 
@@ -637,6 +731,14 @@ impl GitCometView {
 
         if session_emptied {
             self.terminal_sessions.remove(&repo_id);
+            if self.active_repo_id() == Some(repo_id) {
+                // No session means no header and no maximize control, so a
+                // maximized panel could never be restored from the UI again.
+                // Only the repo on screen can lose its header this way: a shell
+                // exiting in a background repository must not collapse the
+                // panel the user is looking at.
+                self.clear_terminal_panel_maximize();
+            }
         }
         if !self.active_repo_has_open_terminal() {
             self.deactivate_terminal_cursor_blink();
@@ -751,8 +853,7 @@ impl GitCometView {
     ) -> TerminalShutdownSummary {
         match action {
             TerminalShutdownAction::CloseRepo { repo_id }
-            | TerminalShutdownAction::MoveRepo { repo_id, .. }
-            | TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
+            | TerminalShutdownAction::MoveRepo { repo_id, .. } => {
                 let mut summary = self
                     .terminal_sessions
                     .get(repo_id)
@@ -912,9 +1013,6 @@ impl GitCometView {
                     target_workspace,
                 );
             }
-            TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
-                self.close_terminal_for_repo(repo_id, cx);
-            }
             TerminalShutdownAction::CloseTerminalTab {
                 repo_id,
                 session_seq,
@@ -958,17 +1056,6 @@ impl GitCometView {
                 cx.defer(crate::app::finish_quit_or_restart);
             }
         }
-    }
-
-    pub(super) fn request_close_terminal_for_repo(
-        &mut self,
-        repo_id: RepoId,
-        cx: &mut gpui::Context<Self>,
-    ) -> bool {
-        self.request_terminal_shutdown_action(
-            TerminalShutdownAction::CloseTerminalForRepo { repo_id },
-            cx,
-        )
     }
 
     fn request_close_terminal_tab(
@@ -1049,6 +1136,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let active_repo = self.active_repo_id()?;
+        let maximized = self.terminal_panel_maximized;
 
         let (viewport_entity, session_seq, tabs, active_index) = {
             let session = self.terminal_sessions.get(&active_repo)?;
@@ -1138,7 +1226,11 @@ impl GitCometView {
             div()
                 .flex()
                 .flex_col()
-                .h(self.terminal_panel_height)
+                // Maximized, the panel is stretched over the main content by the
+                // enclosing column, so its own height is parked rather than
+                // rewritten; the drag handle is off the layout for the duration.
+                .when(!maximized, |d| d.h(self.terminal_panel_height))
+                .when(maximized, |d| d.flex_1())
                 .min_h(px(TERMINAL_PANEL_MIN_HEIGHT_PX))
                 .bg(terminal_default_background(theme))
                 // A focus ring along the top edge reinforces that the terminal is
@@ -1174,6 +1266,8 @@ impl GitCometView {
             .filter(|instance| instance.viewport.read(cx).term_lock.is_some())
             .map(|instance| instance.session_seq);
         let close_repo = active_repo;
+        let maximized = self.terminal_panel_maximized;
+        let (maximize_icon, maximize_tip) = terminal_panel_maximize_control(maximized);
         let repo_id = active_repo;
         let ui_scale = crate::ui_scale::UiScale::current(cx);
         let control_height = components::control_height(ui_scale);
@@ -1368,20 +1462,31 @@ impl GitCometView {
                         ),
                     )
                     .child(
+                        icon_btn("terminal_maximize", maximize_icon, maximize_tip, false)
+                            .debug_selector(|| "terminal_maximize".to_string())
+                            .on_activate(
+                                false,
+                                controls::ControlActivation::Action,
+                                cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                    this.toggle_terminal_panel_maximized(cx);
+                                }),
+                            ),
+                    )
+                    .child(
                         icon_btn(
                             "terminal_close",
                             "icons/generic_close.svg",
                             "Close terminal",
                             false,
                         )
+                        .debug_selector(|| "terminal_close".to_string())
                         .on_activate(
                             false,
                             controls::ControlActivation::Action,
                             cx.listener(move |this, _e: &gpui::ClickEvent, _window, cx| {
                                 cx.stop_propagation();
-                                if !this.request_close_terminal_for_repo(close_repo, cx) {
-                                    this.close_terminal_for_repo(close_repo, cx);
-                                }
+                                this.hide_terminal_panel_for_repo(close_repo, cx);
                             }),
                         ),
                     ),
@@ -1445,6 +1550,45 @@ impl GitCometView {
         self.open_external_terminal_for_repo(repo_id, cx);
     }
 
+    /// Maximize the bottom panel over the commit list and diff, or restore the
+    /// height it had before. While maximized the panel is sized by `flex_1`, so
+    /// `terminal_panel_height` is simply parked: dragging is off the layout and
+    /// the field is untouched until the restore. Per-window state — nothing here
+    /// is persisted.
+    pub(in crate::view) fn toggle_terminal_panel_maximized(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.terminal_panel_maximized {
+            self.terminal_panel_maximized = false;
+            self.terminal_panel_height = self
+                .terminal_panel_height_before_maximize
+                .take()
+                .unwrap_or(px(TERMINAL_PANEL_DEFAULT_HEIGHT_PX));
+        } else {
+            self.terminal_panel_height_before_maximize = Some(self.terminal_panel_height);
+            self.terminal_panel_maximized = true;
+        }
+        cx.notify();
+    }
+
+    /// Drop the maximized state and put the panel back at the height it parked
+    /// when it was maximized. The maximize control lives in the terminal header,
+    /// so wherever the terminal stops rendering there is nothing left to restore
+    /// with, and the panel would stay stretched over the commit list for good.
+    ///
+    /// Deliberately NOT called when the user merely switches the bottom panel's
+    /// active tab to Reflog: the tab strip stays on screen, so switching back to
+    /// Terminal brings this same control back and the maximized panel is still
+    /// one click from restored. Clearing there would throw away a recoverable
+    /// choice.
+    fn clear_terminal_panel_maximize(&mut self) {
+        self.terminal_panel_maximized = false;
+        if let Some(height) = self.terminal_panel_height_before_maximize.take() {
+            self.terminal_panel_height = height;
+        }
+    }
+
     pub(super) fn terminal_panel_resize_handle(
         &mut self,
         theme: AppTheme,
@@ -1453,6 +1597,7 @@ impl GitCometView {
         gpui::div()
             .id("terminal_panel_resize")
             .group("terminal_panel_resize")
+            .debug_selector(|| "terminal_panel_resize".to_string())
             .h(px(TERMINAL_PANEL_RESIZE_HANDLE_PX))
             .w_full()
             .cursor(CursorStyle::ResizeUpDown)
@@ -1640,8 +1785,7 @@ fn terminal_instance_has_running_command(instance: &TerminalInstance) -> bool {
 fn terminate_terminals_for_action(view: &mut GitCometView, action: &TerminalShutdownAction) {
     match action {
         TerminalShutdownAction::CloseRepo { repo_id }
-        | TerminalShutdownAction::MoveRepo { repo_id, .. }
-        | TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
+        | TerminalShutdownAction::MoveRepo { repo_id, .. } => {
             if let Some(session) = view.terminal_sessions.get(repo_id) {
                 for instance in &session.instances {
                     terminate_terminal_process_group(instance.child_pid);

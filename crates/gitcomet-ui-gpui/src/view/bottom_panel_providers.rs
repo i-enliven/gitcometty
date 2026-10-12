@@ -38,8 +38,7 @@ impl BottomPanelProvider for Terminal {
     fn is_open(&self, root: &GitCometView, repo: RepoId, _: &App) -> bool {
         root.terminal_sessions
             .get(&repo)
-            .and_then(|session| session.active_instance())
-            .is_some()
+            .is_some_and(|session| !session.panel_hidden && session.active_instance().is_some())
     }
     fn render(
         &self,
@@ -51,9 +50,7 @@ impl BottomPanelProvider for Terminal {
         root.render_terminal_panel(theme, window, cx)
     }
     fn close(&self, root: &mut GitCometView, repo: RepoId, cx: &mut gpui::Context<GitCometView>) {
-        if !root.request_close_terminal_for_repo(repo, cx) {
-            root.close_terminal_for_repo(repo, cx);
-        }
+        root.hide_terminal_panel_for_repo(repo, cx);
     }
     fn owns_height(&self) -> bool {
         true

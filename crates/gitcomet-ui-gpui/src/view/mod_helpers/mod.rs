@@ -1129,6 +1129,13 @@ pub struct GitCometView {
     pub(super) terminal_preferences: TerminalPreferences,
     pub(super) terminal_sessions: FxHashMap<RepoId, RepoTerminalSession>,
     pub(super) terminal_panel_height: Pixels,
+    /// The bottom panel is stretched over the commit list and diff instead of
+    /// sized by `terminal_panel_height`. Per-window state: it belongs to the
+    /// window that maximized it and is never persisted.
+    pub(super) terminal_panel_maximized: bool,
+    /// The height parked when the panel was maximized, so restoring returns the
+    /// exact height the user had dragged to. Per-window state, never persisted.
+    pub(super) terminal_panel_height_before_maximize: Option<Pixels>,
     pub(super) terminal_panel_resize: Option<TerminalPanelResizeState>,
     pub(super) next_terminal_session_seq: u64,
     pub(super) terminal_cursor_blink_visible: bool,

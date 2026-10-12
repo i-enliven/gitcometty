@@ -745,9 +745,9 @@ impl GitCometView {
 
         if renders_full_chrome(self.view_mode) {
             // Terminal and/or reflog — see `render_bottom_panel` for which.
+            let maximized = self.terminal_panel_maximized;
             let bottom_panel = self.render_bottom_panel(theme, window, cx);
-            let bottom_panel_resize_handle = bottom_panel
-                .is_some()
+            let bottom_panel_resize_handle = (bottom_panel.is_some() && !maximized)
                 .then(|| self.terminal_panel_resize_handle(theme, cx));
             let main_content = self.repository_main_content();
             let details_tabs = self.details_tab_content(cx);
@@ -857,6 +857,13 @@ impl GitCometView {
                                         .overflow_hidden()
                                         .map(|d| {
                                             match (bottom_panel, bottom_panel_resize_handle) {
+                                                // Maximized: the panel alone fills the
+                                                // column. The commit list and diff leave
+                                                // the layout entirely, which is what makes
+                                                // the growth upward rather than sideways.
+                                                (Some(bottom_panel), _) if maximized => {
+                                                    d.flex().flex_col().child(bottom_panel)
+                                                }
                                                 (Some(bottom_panel), Some(resize_handle)) => d
                                                     .flex()
                                                     .flex_col()
@@ -864,6 +871,9 @@ impl GitCometView {
                                                         div()
                                                             .flex_1()
                                                             .min_h(px(0.0))
+                                                            .debug_selector(|| {
+                                                                "main_content_slot".to_string()
+                                                            })
                                                             .child(main_content),
                                                     )
                                                     .child(resize_handle)

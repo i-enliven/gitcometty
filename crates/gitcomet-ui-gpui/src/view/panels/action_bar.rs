@@ -376,6 +376,13 @@ impl ActionBarView {
         }
     }
 
+    /// Repos whose action-bar Terminal button reads selected, i.e. the panel is
+    /// visible for them.
+    #[cfg(test)]
+    pub(in crate::view) fn open_terminal_repo_ids_for_tests(&self) -> FxHashSet<RepoId> {
+        self.open_terminal_repo_ids.clone()
+    }
+
     pub(in crate::view) fn set_terminal_button_target(
         &mut self,
         target: TerminalButtonTarget,
