@@ -103,14 +103,23 @@ fn terminal_panel_maximize_control(maximized: bool) -> (&'static str, &'static s
 impl GitCometView {
     /// Returns the viewport of the embedded terminal that currently holds
     /// keyboard focus in `window`, if any.
+    ///
+    /// Stowed sessions are skipped rather than trusted: hiding the panel leaves
+    /// the viewport entity — and its [`gpui::FocusHandle`] — mounted, and gpui
+    /// only mutates the window's focus in `focus()`/`blur()`, so an unmounted
+    /// handle keeps comparing focused. Without this filter the keystroke
+    /// interceptor would keep pouring every keystroke into an invisible shell
+    /// and swallowing it, so app shortcuts and typing would look dead until the
+    /// user clicked something focusable.
     pub(super) fn focused_terminal_viewport(
         &self,
         window: &Window,
         cx: &gpui::App,
     ) -> Option<Entity<TerminalViewportView>> {
         self.terminal_sessions
-            .values()
-            .flat_map(|session| session.instances.iter())
+            .iter()
+            .filter(|(_, session)| !session.panel_hidden)
+            .flat_map(|(_, session)| session.instances.iter())
             .find(|instance| instance.viewport.read(cx).focus_handle.is_focused(window))
             .map(|instance| instance.viewport.clone())
     }
@@ -722,9 +731,14 @@ impl GitCometView {
 
         if session_emptied {
             self.terminal_sessions.remove(&repo_id);
-            // No session means no header and no maximize control, so a maximized
-            // panel could never be restored from the UI again.
-            self.clear_terminal_panel_maximize();
+            if self.active_repo_id() == Some(repo_id) {
+                // No session means no header and no maximize control, so a
+                // maximized panel could never be restored from the UI again.
+                // Only the repo on screen can lose its header this way: a shell
+                // exiting in a background repository must not collapse the
+                // panel the user is looking at.
+                self.clear_terminal_panel_maximize();
+            }
         }
         if !self.active_repo_has_open_terminal() {
             self.deactivate_terminal_cursor_blink();

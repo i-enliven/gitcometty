@@ -882,3 +882,124 @@ fn a_burst_armed_before_hiding_does_not_repaint_after_hiding(cx: &mut gpui::Test
         "the tick fires after the panel went away, so it must repaint nothing"
     );
 }
+
+#[gpui::test]
+fn a_hidden_terminal_stops_claiming_the_keystroke_interceptor(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    let viewport = cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.terminal_sessions
+                .insert(repo_id, test_terminal_session(vec![(95, None)], 0, cx));
+            let viewport = this
+                .terminal_viewport_for_session(repo_id, 95)
+                .expect("the session under test");
+            let focus = viewport.read(cx).focus_handle.clone();
+            window.focus(&focus, cx);
+            viewport
+        })
+    });
+    refresh_and_draw(cx);
+
+    cx.update(|window, app| {
+        // The premise of the whole test: gpui only mutates a window's focus in
+        // `focus()`/`blur()`, so stowing the panel leaves this handle focused.
+        assert!(
+            viewport.read(app).focus_handle.is_focused(window),
+            "the terminal holds keyboard focus"
+        );
+        assert!(
+            view.read(app)
+                .focused_terminal_viewport(window, app)
+                .is_some(),
+            "a focused terminal that is on screen is the interceptor's target"
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.hide_terminal_panel_for_repo(repo_id, cx)
+        });
+    });
+
+    cx.update(|window, app| {
+        let this = view.read(app);
+        assert!(
+            this.terminal_sessions
+                .get(&repo_id)
+                .is_some_and(|session| session.panel_hidden),
+            "the panel is stowed with its session intact"
+        );
+        assert!(
+            this.focused_terminal_viewport(window, app).is_none(),
+            "a stowed terminal must not keep routing keystrokes into a shell the \
+             user cannot see, which would swallow them until the next click"
+        );
+    });
+}
+
+#[gpui::test]
+fn a_background_repo_shell_exit_leaves_the_active_repo_panel_maximized(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+    let background_repo_id = RepoId(2);
+
+    let events_tx = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            // A second repository, open but not on screen, holding the single
+            // tab whose shell is about to exit on its own.
+            let state = Arc::make_mut(&mut this.state);
+            state.repos.push(RepoState::new_opening(
+                background_repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: PathBuf::from("/tmp/terminal-background-exit"),
+                },
+            ));
+            let (events_tx, events_rx) = smol::channel::unbounded();
+            this.terminal_sessions.insert(
+                background_repo_id,
+                test_terminal_session(vec![(96, Some(events_rx))], 0, cx),
+            );
+            this.spawn_terminal_event_task(background_repo_id, 96, cx);
+            this.terminal_sessions
+                .insert(repo_id, test_terminal_session(vec![(97, None)], 0, cx));
+            this.toggle_terminal_panel_maximized(cx);
+            assert!(
+                this.terminal_panel_maximized,
+                "the repo on screen is maximized before the background exit lands"
+            );
+            events_tx
+        })
+    });
+    cx.run_until_parked();
+
+    events_tx
+        .try_send(TerminalBackendEvent::Exit)
+        .expect("send terminal exit event");
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        assert_eq!(
+            this.active_repo_id(),
+            Some(repo_id),
+            "the background repository is still just a background repository"
+        );
+        assert!(
+            !this.terminal_sessions.contains_key(&background_repo_id),
+            "the exited tab does close its own repository's session"
+        );
+        assert!(
+            this.terminal_panel_maximized,
+            "a shell exiting in a background repository must not collapse the \
+             maximized panel the user is looking at in the active one"
+        );
+        assert!(
+            this.terminal_panel_height_before_maximize.is_some(),
+            "and the height parked for the restore survives it"
+        );
+    });
+}

@@ -355,3 +355,44 @@ fn a_maximized_bottom_panel_grows_the_reflog_tab_alongside_the_terminal(
         "and still without changing width ({before_surface:?} -> {after_surface:?})"
     );
 }
+
+#[gpui::test]
+fn closing_the_terminal_tab_from_the_bottom_panel_strip_hides_the_panel(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+    open_terminal_and_reflog_panels(&view, repo_id, cx);
+
+    // The tab strip's `x` is the only route through the bottom panel provider,
+    // and it has to stow the panel exactly like the header's `x` does: the
+    // session keeps running and the terminal button brings it back.
+    let close = cx
+        .debug_bounds("bottom_panel_tab_terminal_close")
+        .expect("the bottom panel tab strip's close affordance for the terminal tab");
+    cx.simulate_click(close.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    refresh_and_draw(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let session = this
+                .terminal_sessions
+                .get(&repo_id)
+                .expect("closing the terminal tab hides the panel, it does not kill the session");
+            assert!(session.panel_hidden, "the panel is stowed");
+            assert!(
+                session.instance_by_seq(91).is_some(),
+                "the tab and its shell are still there to be brought back"
+            );
+            assert!(
+                this.reflog_panel_is_open(repo_id, cx),
+                "the tab strip's close closes the tab it stands for, and nothing else"
+            );
+        });
+    });
+    assert!(
+        cx.debug_bounds("terminal_context_surface").is_none(),
+        "the panel must actually go away"
+    );
+}
