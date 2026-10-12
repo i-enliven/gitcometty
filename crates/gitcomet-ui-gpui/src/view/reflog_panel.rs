@@ -177,7 +177,17 @@ impl GitCometView {
                 .when(maximized, |d| d.flex_1())
                 .min_h(self.ui_scale().px(REFLOG_PANEL_MIN_HEIGHT_PX) + tab_bar_height)
                 .child(tab_bar)
-                .child(div().flex_1().min_h(px(0.0)).child(content))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h(px(0.0))
+                        // Maximized, this area has to become a flex column: the
+                        // showing panel drops its fixed height for `flex_1`, and
+                        // a block container measures such a child back down to
+                        // its minimum instead of stretching it to the panel.
+                        .when(maximized, |d| d.flex().flex_col())
+                        .child(content),
+                )
                 .into_any(),
         )
     }

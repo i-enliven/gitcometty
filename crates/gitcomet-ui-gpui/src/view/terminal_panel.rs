@@ -334,7 +334,10 @@ impl GitCometView {
         if removed_repo_ids.is_empty() {
             return;
         }
+        let active_repo_id = self.active_repo_id();
+        let mut active_session_removed = false;
         for repo_id in removed_repo_ids {
+            active_session_removed |= Some(repo_id) == active_repo_id;
             if let Some(session) = self.terminal_sessions.remove(&repo_id) {
                 for instance in &session.instances {
                     if let Some(pty) = &instance.pty_sender {
@@ -342,6 +345,11 @@ impl GitCometView {
                     }
                 }
             }
+        }
+        if active_session_removed {
+            // The repository whose panel was on screen is gone, and with it the
+            // header holding the maximize control.
+            self.clear_terminal_panel_maximize();
         }
         if !self.active_repo_has_open_terminal() {
             self.deactivate_terminal_cursor_blink();
@@ -643,6 +651,10 @@ impl GitCometView {
         if let Some(session) = self.terminal_sessions.get_mut(&repo_id) {
             session.panel_hidden = true;
         }
+        // The header, and with it the only maximize control, goes off screen
+        // with the panel: restore the parked height rather than stranding the
+        // panel stretched over the commit list.
+        self.clear_terminal_panel_maximize();
         self.sync_terminal_indicator_views(cx);
         cx.notify();
     }
@@ -710,6 +722,9 @@ impl GitCometView {
 
         if session_emptied {
             self.terminal_sessions.remove(&repo_id);
+            // No session means no header and no maximize control, so a maximized
+            // panel could never be restored from the UI again.
+            self.clear_terminal_panel_maximize();
         }
         if !self.active_repo_has_open_terminal() {
             self.deactivate_terminal_cursor_blink();
@@ -1541,6 +1556,23 @@ impl GitCometView {
             self.terminal_panel_maximized = true;
         }
         cx.notify();
+    }
+
+    /// Drop the maximized state and put the panel back at the height it parked
+    /// when it was maximized. The maximize control lives in the terminal header,
+    /// so wherever the terminal stops rendering there is nothing left to restore
+    /// with, and the panel would stay stretched over the commit list for good.
+    ///
+    /// Deliberately NOT called when the user merely switches the bottom panel's
+    /// active tab to Reflog: the tab strip stays on screen, so switching back to
+    /// Terminal brings this same control back and the maximized panel is still
+    /// one click from restored. Clearing there would throw away a recoverable
+    /// choice.
+    fn clear_terminal_panel_maximize(&mut self) {
+        self.terminal_panel_maximized = false;
+        if let Some(height) = self.terminal_panel_height_before_maximize.take() {
+            self.terminal_panel_height = height;
+        }
     }
 
     pub(super) fn terminal_panel_resize_handle(
