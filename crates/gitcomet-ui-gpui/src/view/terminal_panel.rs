@@ -277,19 +277,23 @@ impl GitCometView {
     }
 
     fn sync_terminal_indicator_views(&mut self, cx: &mut gpui::Context<Self>) {
-        let repo_ids = self
+        // Two different questions, two different sets: the repo tab marker asks
+        // "is a shell running for this repo", the action-bar button asks "is the
+        // panel on screen", so a hidden session reads closed on the button while
+        // its tab keeps the marker.
+        let live: FxHashSet<RepoId> = self.terminal_sessions.keys().copied().collect();
+        let visible: FxHashSet<RepoId> = self
             .terminal_sessions
-            .keys()
-            .copied()
-            .collect::<FxHashSet<RepoId>>();
+            .iter()
+            .filter(|(_, session)| !session.panel_hidden)
+            .map(|(repo_id, _)| *repo_id)
+            .collect();
         let repo_tabs_bar = self.repo_tabs_bar.clone();
         let action_bar = self.action_bar.clone();
         let popover_host = self.popover_host.clone();
         cx.defer(move |cx| {
-            repo_tabs_bar.update(cx, |bar, cx| {
-                bar.set_open_terminal_repo_ids(repo_ids.clone(), cx)
-            });
-            action_bar.update(cx, |bar, cx| bar.set_open_terminal_repo_ids(repo_ids, cx));
+            repo_tabs_bar.update(cx, |bar, cx| bar.set_live_terminal_repo_ids(live, cx));
+            action_bar.update(cx, |bar, cx| bar.set_open_terminal_repo_ids(visible, cx));
             popover_host.update(cx, |host, cx| host.dismiss_stale_terminal_menu(cx));
         });
     }
@@ -452,6 +456,21 @@ impl GitCometView {
         })
     }
 
+    /// Whether a PTY wakeup for this instance should arm a coalesced repaint.
+    /// A hidden panel paints nothing, so a parked session must not wake the
+    /// whole window at up to 60 Hz.
+    pub(in crate::view) fn terminal_repaint_should_schedule(
+        &self,
+        repo_id: RepoId,
+        session_seq: u64,
+    ) -> bool {
+        self.terminal_sessions
+            .get(&repo_id)
+            .filter(|session| !session.panel_hidden)
+            .and_then(|session| session.instance_by_seq(session_seq))
+            .is_some()
+    }
+
     fn spawn_terminal_event_task(
         &mut self,
         repo_id: RepoId,
@@ -498,6 +517,7 @@ impl GitCometView {
                         let Some(session) = this.terminal_sessions.get_mut(&repo_id) else {
                             return false;
                         };
+                        let panel_hidden = session.panel_hidden;
                         let Some(instance) = session.instance_by_seq_mut(session_seq) else {
                             return false;
                         };
@@ -530,6 +550,13 @@ impl GitCometView {
                                 instance.viewport.update(cx, |viewport, _cx| {
                                     viewport.content_epoch = viewport.content_epoch.wrapping_add(1);
                                 });
+                                // The epoch bump stays unconditional: a parked session
+                                // must still be marked dirty so the first paint after
+                                // unhiding rebuilds from the real buffer. Only the
+                                // repaint arming is suppressed.
+                                if panel_hidden {
+                                    return false;
+                                }
                                 // One repaint per frame, not one per read batch.
                                 coalescer.mark_dirty()
                             }
@@ -565,6 +592,11 @@ impl GitCometView {
                             return;
                         }
                         let _ = entity.update(cx, |this, cx| {
+                            // A burst armed while the panel was visible must not
+                            // notify once it has been hidden in the meantime.
+                            if !this.terminal_repaint_should_schedule(repo_id, session_seq) {
+                                return;
+                            }
                             let Some(session) = this.terminal_sessions.get_mut(&repo_id) else {
                                 return;
                             };
@@ -1382,6 +1414,7 @@ impl GitCometView {
                             "Close terminal",
                             false,
                         )
+                        .debug_selector(|| "terminal_close".to_string())
                         .on_activate(
                             false,
                             controls::ControlActivation::Action,

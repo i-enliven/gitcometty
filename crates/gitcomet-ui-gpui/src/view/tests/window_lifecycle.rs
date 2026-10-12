@@ -1548,9 +1548,9 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
         let repo_tabs_bar = view.read(app).repo_tabs_bar.clone();
         repo_tabs_bar.update(app, |bar, cx| {
-            let mut open_terminal_repo_ids = FxHashSet::default();
-            open_terminal_repo_ids.insert(ready_repo_id);
-            bar.set_open_terminal_repo_ids(open_terminal_repo_ids, cx);
+            let mut live_terminal_repo_ids = FxHashSet::default();
+            live_terminal_repo_ids.insert(ready_repo_id);
+            bar.set_live_terminal_repo_ids(live_terminal_repo_ids, cx);
         });
     });
     test_support::redraw(cx);

@@ -266,7 +266,7 @@ pub(in super::super) struct ActionBarView {
     root_view: WeakEntity<GitCometView>,
     notify_fingerprint: u64,
     active_context_menu_invoker: Option<SharedString>,
-    open_terminal_repo_ids: FxHashSet<RepoId>,
+    pub(in crate::view) open_terminal_repo_ids: FxHashSet<RepoId>,
     terminal_button_target: TerminalButtonTarget,
 }
 

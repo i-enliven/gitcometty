@@ -13,7 +13,7 @@ pub(in super::super) struct RepoTabsBarView {
     theme: AppTheme,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
-    open_terminal_repo_ids: FxHashSet<RepoId>,
+    pub(in crate::view) live_terminal_repo_ids: FxHashSet<RepoId>,
     external_folder_drag_active: bool,
     external_folder_drag_hovered: bool,
 
@@ -432,7 +432,7 @@ impl RepoTabsBarView {
             theme,
             _ui_model_subscription: subscription,
             root_view,
-            open_terminal_repo_ids: FxHashSet::default(),
+            live_terminal_repo_ids: FxHashSet::default(),
             external_folder_drag_active: false,
             external_folder_drag_hovered: false,
             hovered_repo_tab: None,
@@ -481,15 +481,15 @@ impl RepoTabsBarView {
         cx.notify();
     }
 
-    pub(in super::super) fn set_open_terminal_repo_ids(
+    pub(in super::super) fn set_live_terminal_repo_ids(
         &mut self,
         next: FxHashSet<RepoId>,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.open_terminal_repo_ids == next {
+        if self.live_terminal_repo_ids == next {
             return;
         }
-        self.open_terminal_repo_ids = next;
+        self.live_terminal_repo_ids = next;
         cx.notify();
     }
 
@@ -807,7 +807,7 @@ impl Render for RepoTabsBarView {
             .map(|(repo, label)| {
                 let text_width =
                     repo_tab_text_width(label.clone(), px(REPO_TAB_FONT_SIZE_PX), window);
-                let terminal_width = if self.open_terminal_repo_ids.contains(&repo.id) {
+                let terminal_width = if self.live_terminal_repo_ids.contains(&repo.id) {
                     px(REPO_TAB_LABEL_GAP_PX + REPO_TAB_STATUS_SIZE_PX)
                 } else {
                     px(0.0)
@@ -993,7 +993,7 @@ impl Render for RepoTabsBarView {
                     .debug_selector(move || format!("repo_tab_label_{}", repo_id.0))
                     .flex_1(),
                 )
-                .when(self.open_terminal_repo_ids.contains(&repo_id), |d| {
+                .when(self.live_terminal_repo_ids.contains(&repo_id), |d| {
                     d.child(
                         div()
                             .debug_selector(move || format!("repo_tab_terminal_{}", repo_id.0))

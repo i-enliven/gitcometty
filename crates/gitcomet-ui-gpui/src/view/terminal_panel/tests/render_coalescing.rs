@@ -34,6 +34,62 @@ fn a_burst_of_grid_updates_coalesces_into_one_repaint_per_tick() {
     assert!(coalescer.claim_burst(), "and that burst flushes");
 }
 
+/// The repaint-scheduling rule is a pure predicate on session state, so it is
+/// checked directly instead of racing a coalescing tick.
+#[gpui::test]
+fn a_hidden_terminal_session_schedules_no_repaint(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let (events_tx, events_rx) = smol::channel::unbounded();
+            this.terminal_sessions.insert(
+                repo_id,
+                test_terminal_session(vec![(60, Some(events_rx))], 0, cx),
+            );
+            assert!(
+                this.terminal_repaint_should_schedule(repo_id, 60),
+                "a visible session arms the coalesced repaint"
+            );
+
+            this.terminal_sessions
+                .get_mut(&repo_id)
+                .expect("the session under test")
+                .panel_hidden = true;
+            assert!(
+                !this.terminal_repaint_should_schedule(repo_id, 60),
+                "a hidden session paints nothing, so it must not wake the window at 60 Hz"
+            );
+            drop(events_tx);
+        })
+    });
+}
+
+#[gpui::test]
+fn a_missing_terminal_session_schedules_no_repaint(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, _cx| {
+            assert!(
+                !this.terminal_repaint_should_schedule(repo_id, 61),
+                "no session at all schedules nothing"
+            );
+        });
+        view.update(app, |this, cx| {
+            this.terminal_sessions
+                .insert(repo_id, test_terminal_session(vec![(60, None)], 0, cx));
+            assert!(
+                !this.terminal_repaint_should_schedule(repo_id, 61),
+                "a sequence no instance owns, for example a tab that closed while its \
+                 tick was in flight, schedules nothing"
+            );
+        });
+    });
+}
+
 #[gpui::test]
 fn terminal_wakeups_notify_the_viewport_once_per_frame(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
