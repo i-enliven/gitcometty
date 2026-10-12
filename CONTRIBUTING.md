@@ -98,7 +98,7 @@ cargo run -p gitcomet --features ui-gpui,gix -- /path/to/repo
 
 ### Testing
 
-Full headless test suite (CI mode):
+Full headless test suite:
 
 ```bash
 cargo test --workspace \
@@ -110,8 +110,10 @@ cargo test --workspace \
 Do not drop the two `--exclude` flags: the example app enables the
 application's GUI, which the headless workspace context must not inherit —
 this is the same exclusion `EXAMPLE_PACKAGES` applies in `scripts/ci/run.py`.
+That exclusion is why the examples are not covered above; run them with
+`python3 scripts/ci/run.py test --context example`.
 
-Clippy (CI mode):
+Clippy:
 
 ```bash
 cargo clippy --workspace \
@@ -119,6 +121,11 @@ cargo clippy --workspace \
   --exclude gitcomet-extension-example-app \
   --no-default-features --features gix -- -D warnings
 ```
+
+These are the local headless forms. CI drives the same context through
+`python3 scripts/ci/run.py test --context workspace`, which additionally
+enables `gitcomet-ui-gpui/default`, and lints per-crate (see
+`.github/workflows/rust.yml`).
 
 Coverage (local + CI-compatible):
 

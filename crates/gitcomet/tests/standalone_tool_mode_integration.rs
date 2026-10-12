@@ -10,60 +10,96 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Upper bound for any `gitcomet` subprocess these tests spawn. A run that
-/// outlives it is wedged — for example a feature-unification slip that lets a
-/// headless test reach the GUI event loop — and must fail loudly instead of
-/// hanging the rest of the suite.
-const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(120);
+/// Upper bound for any `gitcomet` subprocess these tests spawn. The deadline
+/// covers the whole run *and* draining its pipes, so a wedged child — for
+/// example a feature-unification slip that lets a headless test reach the GUI
+/// event loop, or a grandchild that keeps the pipes open after the direct
+/// child exits — fails loudly instead of hanging the rest of the suite.
+const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn drain_pipe<R: Read>(mut stream: R) -> Vec<u8> {
+fn drain_pipe(sender: mpsc::Sender<Vec<u8>>, mut stream: impl Read) {
     let mut buffer = Vec::new();
     stream
         .read_to_end(&mut buffer)
         .expect("subprocess pipe to be readable");
-    buffer
+    let _ = sender.send(buffer);
 }
 
-/// `Command::output()` with a deadline. The pipes are drained on helper
-/// threads so a chatty child cannot deadlock on a full pipe while the parent
-/// polls, and a child that outlives [`SUBPROCESS_TIMEOUT`] is killed and named
-/// in the panic.
+fn kill_and_reap(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn timed_out(program: &str, child: &mut Child) -> ! {
+    kill_and_reap(child);
+    panic!("`{program}` was still running after {SUBPROCESS_TIMEOUT:?}");
+}
+
+/// Take one drained buffer, but never later than the run's deadline. Joining
+/// the reader threads instead would block until EOF, which a grandchild that
+/// inherited the pipe write end and outlived the direct child holds open
+/// forever.
+fn receive_by_deadline(
+    receiver: &mpsc::Receiver<Vec<u8>>,
+    deadline: Instant,
+    program: &str,
+    child: &mut Child,
+) -> Vec<u8> {
+    match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        Ok(buffer) => buffer,
+        Err(mpsc::RecvTimeoutError::Timeout) => timed_out(program, child),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            kill_and_reap(child);
+            panic!("`{program}` output reader thread stopped before EOF");
+        }
+    }
+}
+
+/// `Command::output()` with a deadline that bounds every step: waiting for the
+/// child and draining both pipes. The drains run on helper threads feeding an
+/// `mpsc` channel so a chatty child cannot deadlock on a full pipe while the
+/// parent polls, and every path that leaves the run incomplete kills and reaps
+/// the child before panicking.
 fn run_bounded(command: &mut Command) -> Output {
     let program = command.get_program().to_string_lossy().into_owned();
+    let deadline = Instant::now() + SUBPROCESS_TIMEOUT;
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("gitcomet command to spawn");
+    let (stdout_sender, stdout) = mpsc::channel();
+    let (stderr_sender, stderr) = mpsc::channel();
     let stdout_pipe = child.stdout.take().expect("piped stdout");
     let stderr_pipe = child.stderr.take().expect("piped stderr");
-    let stdout = thread::spawn(move || drain_pipe(stdout_pipe));
-    let stderr = thread::spawn(move || drain_pipe(stderr_pipe));
-    let deadline = Instant::now() + SUBPROCESS_TIMEOUT;
+    thread::spawn(move || drain_pipe(stdout_sender, stdout_pipe));
+    thread::spawn(move || drain_pipe(stderr_sender, stderr_pipe));
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    panic!("`{program}` was still running after {SUBPROCESS_TIMEOUT:?}");
+                    timed_out(&program, &mut child);
                 }
                 thread::sleep(Duration::from_millis(20));
             }
-            Err(err) => panic!("failed to wait for `{program}`: {err}"),
+            Err(error) => {
+                kill_and_reap(&mut child);
+                panic!("failed to wait for `{program}`: {error}");
+            }
         }
     };
 
     Output {
         status,
-        stdout: stdout.join().expect("gitcomet stdout reader thread"),
-        stderr: stderr.join().expect("gitcomet stderr reader thread"),
+        stdout: receive_by_deadline(&stdout, deadline, &program, &mut child),
+        stderr: receive_by_deadline(&stderr, deadline, &program, &mut child),
     }
 }
 

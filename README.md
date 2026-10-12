@@ -117,8 +117,10 @@ Two runtime notes:
 ### Test
 
 ```bash
-# Full suite, headless CI mode
-cargo test --workspace --no-default-features --features gix
+# Full suite — the headless workspace gate CI runs. Needs `cargo-nextest`
+# 0.9.145, installed with `python3 scripts/ci/install-nextest.py`.
+python3 scripts/ci/run.py compile --context workspace
+python3 scripts/ci/run.py test --context workspace
 
 # One crate
 cargo test -p gitcomet-ui-gpui --lib
@@ -130,24 +132,28 @@ cargo test -p gitcomet-ui-gpui --lib terminal
 The GPUI harnesses (`gitcomet-ui-gpui`, `gitcomet-ui-kit`,
 `gitcomet-extension-example`) must run under **libtest, one process per crate** —
 their test contexts share process-global platform state, so they do not work
-under nextest's process-per-test model. Everything else runs under nextest.
-
-The canonical wrapper CI uses handles that split for you, but needs
-`cargo-nextest` 0.9.145 (`python3 scripts/ci/install-nextest.py`):
-
-```bash
-python3 scripts/ci/run.py compile --context workspace
-python3 scripts/ci/run.py test --context workspace
-```
+under nextest's process-per-test model. Everything else runs under nextest, and
+the `run.py` wrapper handles that split. It also keeps the two example packages
+out of the workspace context — the example app enables the application's GUI,
+which a headless run must not inherit — and gives them their own
+`--context example` run. A bare `cargo test --workspace` inherits that GUI
+feature and cannot pass headless; `CONTRIBUTING.md` documents the equivalent
+`--exclude` form.
 
 ### Lint and format
 
 ```bash
 cargo fmt --all --check
-cargo clippy --workspace --no-default-features --features gix -- -D warnings
+cargo clippy --workspace \
+  --exclude gitcomet-extension-example \
+  --exclude gitcomet-extension-example-app \
+  --no-default-features --features gix -- -D warnings
 ```
 
-Both are enforced in CI. `unsafe_code = "forbid"` is a workspace lint.
+Both are enforced in CI, where the clippy jobs are per-crate
+(`.github/workflows/rust.yml`); the workspace form above is the local
+equivalent and needs the same two `--exclude` flags as the test command.
+`unsafe_code = "forbid"` is a workspace lint.
 
 ### Using it as a difftool / mergetool
 
@@ -180,6 +186,11 @@ Built-in themes are embedded in the binary.
 Custom themes are loaded from JSON bundle files in your per-user themes directory,
 which the app creates on startup. Schema, file locations and override behaviour:
 [THEMES.md](docs/themes.md).
+
+<!-- The `[THEMES.md]` label above is pinned verbatim by
+     `readme_themes_section_points_to_theme_guide` in
+     `crates/gitcomet-ui-kit/src/theme/tests.rs`. Neighbouring docs links use
+     backticked labels; do not "fix" this one to match. -->
 
 ### Crash logs
 
