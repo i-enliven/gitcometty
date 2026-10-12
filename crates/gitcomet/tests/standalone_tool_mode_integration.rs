@@ -8,8 +8,64 @@ mod gitcomet_test_bin;
 use gitcomet_test_bin::gitcomet_bin;
 use std::ffi::{OsStr, OsString};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+/// Upper bound for any `gitcomet` subprocess these tests spawn. A run that
+/// outlives it is wedged — for example a feature-unification slip that lets a
+/// headless test reach the GUI event loop — and must fail loudly instead of
+/// hanging the rest of the suite.
+const SUBPROCESS_TIMEOUT: Duration = Duration::from_secs(120);
+
+fn drain_pipe<R: Read>(mut stream: R) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    stream
+        .read_to_end(&mut buffer)
+        .expect("subprocess pipe to be readable");
+    buffer
+}
+
+/// `Command::output()` with a deadline. The pipes are drained on helper
+/// threads so a chatty child cannot deadlock on a full pipe while the parent
+/// polls, and a child that outlives [`SUBPROCESS_TIMEOUT`] is killed and named
+/// in the panic.
+fn run_bounded(command: &mut Command) -> Output {
+    let program = command.get_program().to_string_lossy().into_owned();
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("gitcomet command to spawn");
+    let stdout_pipe = child.stdout.take().expect("piped stdout");
+    let stderr_pipe = child.stderr.take().expect("piped stderr");
+    let stdout = thread::spawn(move || drain_pipe(stdout_pipe));
+    let stderr = thread::spawn(move || drain_pipe(stderr_pipe));
+    let deadline = Instant::now() + SUBPROCESS_TIMEOUT;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("`{program}` was still running after {SUBPROCESS_TIMEOUT:?}");
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            Err(err) => panic!("failed to wait for `{program}`: {err}"),
+        }
+    };
+
+    Output {
+        status,
+        stdout: stdout.join().expect("gitcomet stdout reader thread"),
+        stderr: stderr.join().expect("gitcomet stderr reader thread"),
+    }
+}
 
 fn run_gitcomet<I, S>(args: I) -> Output
 where
@@ -17,10 +73,7 @@ where
     S: AsRef<OsStr>,
 {
     let _timer = FixtureTimer::new("subprocess", "gitcomet");
-    no_window_command(gitcomet_bin())
-        .args(args)
-        .output()
-        .expect("gitcomet command to run")
+    run_bounded(no_window_command(gitcomet_bin()).args(args))
 }
 
 fn run_gitcomet_in_dir<I, S>(dir: &Path, args: I) -> Output
@@ -29,11 +82,11 @@ where
     S: AsRef<OsStr>,
 {
     let _timer = FixtureTimer::new("subprocess", "gitcomet");
-    no_window_command(gitcomet_bin())
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .expect("gitcomet command to run")
+    run_bounded(
+        no_window_command(gitcomet_bin())
+            .current_dir(dir)
+            .args(args),
+    )
 }
 
 fn run_gitcomet_in_dir_with_global_env<I, S>(
@@ -48,11 +101,7 @@ where
     let _timer = FixtureTimer::new("subprocess", "gitcomet");
     let mut command = no_window_command(gitcomet_bin());
     env.apply_to_command(&mut command);
-    command
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .expect("gitcomet command to run")
+    run_bounded(command.current_dir(dir).args(args))
 }
 
 fn git_config_get(repo_dir: &Path, key: &str) -> Option<String> {

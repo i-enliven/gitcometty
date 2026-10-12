@@ -175,9 +175,11 @@ drop-in.
 
 ### Themes
 
-Built-in themes are embedded in the binary. Custom themes are JSON bundles in
-your per-user themes directory, which the app creates on startup. Schema, file
-locations and override behaviour: [`docs/themes.md`](docs/themes.md).
+Built-in themes are embedded in the binary.
+
+Custom themes are loaded from JSON bundle files in your per-user themes directory,
+which the app creates on startup. Schema, file locations and override behaviour:
+[THEMES.md](docs/themes.md).
 
 ### Crash logs
 

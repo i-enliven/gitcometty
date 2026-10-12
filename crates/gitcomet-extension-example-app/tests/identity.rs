@@ -1,7 +1,7 @@
 //! The example product launches under its own identity and paths using the
 //! upstream crates, with no product feature flags.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn example(args: &[&str], home: &Path) -> Output {
@@ -19,6 +19,24 @@ fn example(args: &[&str], home: &Path) -> Output {
 
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// Replace the example executable's own path with a placeholder.
+///
+/// The setup/uninstall dry-runs echo that path in every
+/// `mergetool.<tool>.cmd` / `difftool.<tool>.cmd` value, so a checkout that
+/// happens to live in a directory whose name contains `gitcomet` is not an
+/// identity leak. This masks that one machine-derived token and nothing else:
+/// config keys, tool names, values and the display name stay pinned, so a real
+/// leak still trips the assertions below.
+fn without_exe_path(text: &str) -> String {
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_comet-example"));
+    let canonical = exe.canonicalize().unwrap_or_else(|_| exe.clone());
+    [exe, canonical]
+        .into_iter()
+        .fold(text.to_owned(), |text, path| {
+            text.replace(path.to_string_lossy().as_ref(), "<exe>")
+        })
 }
 
 #[test]
@@ -51,18 +69,20 @@ fn git_tool_setup_registers_only_the_example_tools() {
     let home = tempfile::tempdir().unwrap();
     let setup = example(&["setup", "--dry-run"], home.path());
     assert_eq!(setup.status.code(), Some(0));
-    let setup = stdout(&setup);
+    let setup = without_exe_path(&stdout(&setup));
     assert!(setup.contains("mergetool.comet-example.cmd"), "{setup}");
     assert!(setup.contains("difftool.comet-example-gui.cmd"), "{setup}");
     assert!(setup.contains("comet-example.backup.*"), "{setup}");
     assert!(!setup.contains("gitcomet"), "{setup}");
+    assert!(!setup.contains("GitComet"), "{setup}");
 
-    let uninstall = stdout(&example(&["uninstall", "--dry-run"], home.path()));
+    let uninstall = without_exe_path(&stdout(&example(&["uninstall", "--dry-run"], home.path())));
     assert!(
         uninstall.contains("mergetool.comet-example.cmd"),
         "{uninstall}"
     );
     assert!(!uninstall.contains("gitcomet"), "{uninstall}");
+    assert!(!uninstall.contains("GitComet"), "{uninstall}");
 }
 
 #[test]
